@@ -7,12 +7,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 
 from ..ai.summarizer import DailySummarizer
 from ..console_icons import IconStyle, get_icons
-from ..environment import load_horizon_dotenv
 from ..models import (
     ClassificationResult,
     ContentAnalysis,
@@ -237,13 +237,13 @@ def main() -> None:
     parser.add_argument(
         "--delivery",
         default=None,
-        choices=["summary", "overview", "summary_and_items"],
+        choices=["summary", "summary_and_items"],
         help="Override the delivery mode from config for this test.",
     )
     args = parser.parse_args()
 
     try:
-        load_horizon_dotenv()
+        load_dotenv()
 
         storage = StorageManager(data_dir=str(Path("data")))
         try:
