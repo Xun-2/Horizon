@@ -17,6 +17,11 @@ _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
 _FRIEND_DIGEST_LIMIT = 12
 _FRIEND_DIGEST_FEATURED = 3
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？])|(?<=[.!?])(?=\s|$)")
+_SENTENCE_DOT_PLACEHOLDER = "\uE000"
+_COMMON_ABBREVIATION = re.compile(
+    r"\b(?:(?:[A-Za-z]\.){2,}|(?:Inc|Ltd|Corp|Co)\.)",
+    re.IGNORECASE,
+)
 
 
 def _escape_markdown(value: object) -> str:
@@ -53,9 +58,13 @@ def _split_sentences(value: object) -> List[str]:
     normalized = re.sub(r"\s+", " ", str(value)).strip()
     if not normalized:
         return []
+    protected = _COMMON_ABBREVIATION.sub(
+        lambda match: match.group(0).replace(".", _SENTENCE_DOT_PLACEHOLDER),
+        normalized,
+    )
     return [
-        sentence.strip()
-        for sentence in _SENTENCE_BOUNDARY.split(normalized)
+        sentence.replace(_SENTENCE_DOT_PLACEHOLDER, ".").strip()
+        for sentence in _SENTENCE_BOUNDARY.split(protected)
         if sentence.strip()
     ]
 
@@ -111,6 +120,10 @@ FRIEND_DIGEST_LABELS = {
             "I went through today's updates and picked {count}. "
             "These {featured} are worth starting with:"
         ),
+        "intro_singular": (
+            "I went through today's updates and picked one. "
+            "This one is worth starting with:"
+        ),
         "what": "What happened",
         "why": "Why it matters",
         "key": "Key point",
@@ -126,6 +139,7 @@ FRIEND_DIGEST_LABELS = {
     "zh": {
         "title": "今天这几条 AI 动态值得看",
         "intro": "我从今天的更新里挑了 {count} 条，先看最值得关注的 {featured} 条：",
+        "intro_singular": "我从今天的更新里挑了 1 条，先看这一条：",
         "what": "发生了什么",
         "why": "为什么值得看",
         "key": "重点",
@@ -343,10 +357,15 @@ class DailySummarizer:
             return f"# {labels['title']}\n\n{labels['empty']}"
 
         featured_count = min(_FRIEND_DIGEST_FEATURED, len(selected))
+        intro = (
+            labels["intro_singular"]
+            if featured_count == 1
+            else labels["intro"]
+        )
         lines = [
             f"# {labels['title']}",
             "",
-            labels["intro"].format(
+            intro.format(
                 count=len(selected),
                 featured=featured_count,
             ),

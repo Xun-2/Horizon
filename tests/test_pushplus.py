@@ -147,6 +147,77 @@ def test_pushplus_failure_redacts_configured_token_from_detail():
     assert "<redacted>" in (result.detail or "")
 
 
+def test_pushplus_failure_redacts_token_from_string_json_body():
+    secret = "pushplus-string-json-secret"
+    notifier = _notifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            platform="pushplus",
+            request_body=json.dumps({"token": secret, "content": "#{summary}"}),
+        )
+    )
+
+    result = notifier._handle_response_status(
+        httpx.Response(
+            200,
+            json={"code": 500, "msg": f"invalid token {secret}"},
+        ),
+        TEST_URL,
+    )
+
+    assert secret not in (result.detail or "")
+    assert "<redacted>" in (result.detail or "")
+
+
+def test_pushplus_failure_redacts_sensitive_configured_header():
+    secret = "pushplus-header-secret"
+    notifier = _notifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            platform="pushplus",
+            headers=f"Authorization: {secret}",
+        )
+    )
+
+    result = notifier._handle_response_status(
+        httpx.Response(
+            200,
+            json={"code": 500, "msg": f"invalid token {secret}"},
+        ),
+        TEST_URL,
+    )
+
+    assert secret not in (result.detail or "")
+    assert "<redacted>" in (result.detail or "")
+
+
+def test_unexpected_status_redacts_configured_secret_from_console():
+    secret = "pushplus-console-secret"
+    console = MagicMock()
+    os.environ[TEST_URL_ENV] = TEST_URL
+    notifier = WebhookNotifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            request_body=json.dumps({"token": secret}),
+        ),
+        console=console,
+    )
+
+    result = notifier._handle_response_status(
+        httpx.Response(199, text=f"echoed token: {secret}"),
+        TEST_URL,
+    )
+
+    rendered_console = " ".join(
+        str(call.args) for call in console.print.call_args_list
+    )
+    assert secret not in (result.detail or "")
+    assert secret not in rendered_console
+
+
 def test_pushplus_rejects_2xx_response_without_business_code():
     notifier = _notifier(
         WebhookConfig(enabled=True, url_env=TEST_URL_ENV, platform="pushplus")
@@ -186,6 +257,23 @@ def test_preview_recursively_redacts_sensitive_json_fields():
     assert body["nested"]["items"][0]["password"] == "<redacted>"
     assert body["content"] == "safe content"
     assert body["nested"]["items"][0]["label"] == "kept"
+
+
+def test_preview_redacts_sensitive_form_body():
+    secret = "pushplus-form-secret"
+    notifier = _notifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            request_body=f"token={secret}&content=safe",
+        )
+    )
+
+    preview = notifier.build_preview({})
+
+    assert secret not in preview["body"]
+    assert "token=<redacted>" in preview["body"]
+    assert "content=safe" in preview["body"]
 
 
 def test_webhook_config_accepts_pushplus_overview_mode():

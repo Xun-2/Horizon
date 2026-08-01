@@ -3,6 +3,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from src.ai.summarizer import DailySummarizer
 from src.models import (
     ArtifactSource,
@@ -158,6 +160,45 @@ def test_generate_friend_digest_uses_key_point_for_one_sentence():
 
     assert "**Key point:** One supported sentence." in result
     assert "**Why it matters:**" not in result
+
+
+def test_generate_friend_digest_uses_natural_singular_intro():
+    result = DailySummarizer().generate_friend_digest(
+        [_make_friend_item(1)], "2026-07-31", 1, language="en"
+    )
+
+    assert "This one is worth starting with:" in result
+    assert "These 1 are worth starting with:" not in result
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_what"),
+    [
+        (
+            "The U.S. approved a new model rule. It matters to AI teams.",
+            "The U.S. approved a new model rule.",
+        ),
+        (
+            "Acme Inc. released a compact model. It runs on laptops.",
+            "Acme Inc. released a compact model.",
+        ),
+        (
+            "Teams can use e.g. smaller models today. This reduces costs.",
+            "Teams can use e.g. smaller models today.",
+        ),
+    ],
+)
+def test_generate_friend_digest_preserves_common_abbreviations(
+    summary, expected_what
+):
+    item = _make_friend_item(1)
+    item.processing.artifacts["en"].blocks[0].content = summary
+
+    result = DailySummarizer().generate_friend_digest(
+        [item], "2026-07-31", 1, language="en"
+    )
+
+    assert f"**What happened:** {expected_what}" in result
 
 
 def test_generate_friend_digest_empty_copy_is_natural_and_not_diagnostic():

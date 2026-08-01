@@ -7,7 +7,7 @@ import re
 from rich.console import Console
 from dataclasses import asdict, dataclass
 from enum import Enum
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Union, cast
 import httpx
@@ -275,6 +275,16 @@ def _sensitive_values(value: Any) -> set[str]:
     elif isinstance(value, list):
         for item in value:
             found.update(_sensitive_values(item))
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            for key, item in parse_qsl(value, keep_blank_values=True):
+                if _SENSITIVE_HEADER_RE.search(key) and item:
+                    found.add(item)
+        else:
+            if isinstance(parsed, (dict, list)):
+                found.update(_sensitive_values(parsed))
     return found
 
 
@@ -287,6 +297,9 @@ class WebhookNotifier:
         self.icons = icons if icons is not None else get_icons()
         self.url = None
         self._configured_secrets = _sensitive_values(config.request_body)
+        self._configured_secrets.update(
+            _sensitive_values(_extract_headers(config.headers))
+        )
         self._validate_config()  # sets self.url or raises ValueError
 
     def _redact_configured_secrets(self, value: str) -> str:
@@ -497,6 +510,7 @@ class WebhookNotifier:
                 body_content = json.dumps(
                     _redact_sensitive_json(parsed_body), ensure_ascii=False
                 )
+            body_content = self._redact_configured_secrets(body_content)
         return {
             "url": redact_url(request_url),
             "body": body_content,
@@ -852,7 +866,7 @@ class WebhookNotifier:
             )
         else:
             self.console.print(
-                f"[red]Webhook unexpected status={status}: {response.text[:500]}[/red]"
+                f"[red]Webhook unexpected status={status}: {body}[/red]"
             )
             logger.error("Webhook unexpected status: URL=%s, status=%d", safe_url, status)
 
