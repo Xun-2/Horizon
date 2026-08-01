@@ -187,34 +187,6 @@ class DailySummarizer:
             ),
         )
 
-    @staticmethod
-    def _references(
-        item: ContentItem, language: str
-    ) -> list[tuple[str, Optional[str]]]:
-        artifact = item.processing.artifacts.get(language) if item.processing else None
-        candidates = []
-        for source in item.metadata.get("sources", []):
-            if isinstance(source, dict):
-                candidates.append(
-                    (
-                        str(source.get("title") or source.get("source") or "Source"),
-                        str(source.get("url") or ""),
-                    )
-                )
-        if artifact:
-            candidates.extend((source.title, source.url) for source in artifact.sources)
-
-        references = []
-        seen = set()
-        for title, raw_url in candidates:
-            normalized = raw_url.strip()
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            url = _safe_url(raw_url)
-            references.append((title, url))
-        return references
-
     def build_view(
         self,
         items: List[ContentItem],
@@ -475,17 +447,6 @@ class DailySummarizer:
                     f"{view_item.index}. {title_link} "
                     f"\u2b50\ufe0f {view_item.score}/10"
                 )
-                references = self._references(view_item.item, language)
-                if references:
-                    source_links = " · ".join(
-                        (
-                            f"[{_escape_markdown(reference_title)}]({reference_url})"
-                            if reference_url
-                            else _escape_markdown(reference_title)
-                        )
-                        for reference_title, reference_url in references
-                    )
-                    entries.append(f"   {labels['source']}: {source_links}")
             sections.append("\n".join(entries))
 
         return header + "\n\n".join(sections)
@@ -596,17 +557,16 @@ class DailySummarizer:
                     ["", f"{'#' * (heading_level + 1)} {block_title}", "", block_content]
                 )
 
-        references = self._references(item, language)
-        if references:
+        sources = artifact.sources if artifact else []
+        if sources:
             reference_items = []
-            for reference_title, reference_url in references:
-                safe_title = html.escape(reference_title, quote=True)
+            for source in sources:
+                reference_title = html.escape(source.title, quote=True)
+                reference_url = _safe_url(source.url)
                 if reference_url:
-                    reference_items.append(
-                        f'<li><a href="{reference_url}">{safe_title}</a></li>\n'
-                    )
+                    reference_items.append(f'<li><a href="{reference_url}">{reference_title}</a></li>\n')
                 else:
-                    reference_items.append(f"<li>{safe_title}</li>\n")
+                    reference_items.append(f"<li>{reference_title}</li>\n")
             items_html = "".join(reference_items)
             lines += [
                 "",
