@@ -247,6 +247,37 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
+def _redact_sensitive_json(value: Any) -> Any:
+    """Recursively mask values stored under sensitive JSON keys."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                "<redacted>"
+                if _SENSITIVE_HEADER_RE.search(str(key))
+                else _redact_sensitive_json(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_json(item) for item in value]
+    return value
+
+
+def _sensitive_values(value: Any) -> set[str]:
+    """Collect configured secret values without exposing their names or contents."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _SENSITIVE_HEADER_RE.search(str(key)) and isinstance(item, str) and item:
+                found.add(item)
+            else:
+                found.update(_sensitive_values(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_sensitive_values(item))
+    return found
+
+
 class WebhookNotifier:
     """Sends webhook notifications after pipeline completion or failure."""
 
@@ -255,7 +286,15 @@ class WebhookNotifier:
         self.console = console if console is not None else Console(stderr=True)
         self.icons = icons if icons is not None else get_icons()
         self.url = None
+        self._configured_secrets = _sensitive_values(config.request_body)
         self._validate_config()  # sets self.url or raises ValueError
+
+    def _redact_configured_secrets(self, value: str) -> str:
+        """Mask configured secret values if a remote service echoes them."""
+        redacted = value
+        for secret in sorted(self._configured_secrets, key=len, reverse=True):
+            redacted = redacted.replace(secret, "<redacted>")
+        return redacted
 
     def _validate_url(self, url: str) -> str:
         """Validate webhook URL has a valid scheme (http/https) and hostname.
@@ -449,6 +488,15 @@ class WebhookNotifier:
     def build_preview(self, variables: dict) -> dict[str, Any]:
         """Build the fully rendered request for dry-run preview."""
         request_url, body_content, headers = self._render_request_components(variables)
+        if body_content is not None:
+            try:
+                parsed_body = json.loads(body_content)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            else:
+                body_content = json.dumps(
+                    _redact_sensitive_json(parsed_body), ensure_ascii=False
+                )
         return {
             "url": redact_url(request_url),
             "body": body_content,
@@ -505,24 +553,44 @@ class WebhookNotifier:
             ]
 
         delivery = getattr(self.config, "delivery", "summary")
-        if delivery == "summary_and_items":
+        if delivery in {"overview", "summary_and_items"}:
             item_messages: List[dict[str, Any]] = []
-            overview = summarizer.generate_webhook_overview(
-                important_items,
-                date,
-                all_items_count,
-                language=lang,
+            use_friend_digest = (
+                self.config.platform == "pushplus" and delivery == "overview"
             )
-            overview_message = {
-                **base_vars,
-                "message_title": (
+            if use_friend_digest:
+                overview = summarizer.generate_friend_digest(
+                    important_items,
+                    date,
+                    all_items_count,
+                    language=lang,
+                )
+                message_title = (
+                    "今天这几条 AI 动态值得看"
+                    if lang == "zh"
+                    else "A few AI updates worth your time today"
+                )
+            else:
+                overview = summarizer.generate_webhook_overview(
+                    important_items,
+                    date,
+                    all_items_count,
+                    language=lang,
+                )
+                message_title = (
                     f"Horizon {date} 总览"
                     if lang == "zh"
                     else f"Horizon {date} Overview"
-                ),
+                )
+            overview_message = {
+                **base_vars,
+                "message_title": message_title,
                 "message_kind": "overview",
                 "summary": overview,
             }
+            if delivery == "overview":
+                return [overview_message]
+
             view = summarizer.build_view(important_items, lang)
             for group in view.groups:
                 for view_item in group.items:
@@ -679,12 +747,26 @@ class WebhookNotifier:
         - DingTalk: {"errcode": non-zero, "errmsg": "..."}
         - Slack/Discord: {"ok": false}
         """
+        platform = (self.config.platform or "").lower()
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
+            if platform == "pushplus":
+                return "PushPlus error: response is not valid JSON"
             return None
 
-        platform = (self.config.platform or "").lower()
+        if not isinstance(data, dict):
+            if platform == "pushplus":
+                return "PushPlus error: response is not a JSON object"
+            return None
+
+        if platform == "pushplus":
+            code = data.get("code")
+            if code != 200:
+                msg = data.get("msg") or "missing or invalid business code"
+                return f"PushPlus error (code={code}): {msg}"
+            return None
+
         check_all = platform in ("", "generic")
 
         if platform in ("feishu", "lark") or check_all:
@@ -716,7 +798,7 @@ class WebhookNotifier:
         Slack ok=false).
         """
         status = response.status_code
-        body = response.text[:500]
+        body = self._redact_configured_secrets(response.text[:500])
 
         if 200 <= status < 300:
             error_hint = self._check_body_error_code(body)
