@@ -7,12 +7,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 
 from ..ai.summarizer import DailySummarizer
 from ..console_icons import IconStyle, get_icons
+from ..environment import load_horizon_dotenv
 from ..models import (
     ClassificationResult,
     ContentAnalysis,
@@ -45,6 +45,7 @@ def _make_test_items() -> list[ContentItem]:
                 score=9.0,
                 summary="OpenAI released GPT-5 featuring multimodal capabilities and improved reasoning.",
                 tags=["ai", "llm", "openai"],
+                title_en="GPT-5 Released with Multimodal Capabilities",
                 title_zh="GPT-5 发布：多模态能力大幅提升",
                 lead_zh="OpenAI 发布了 GPT-5，具备多模态能力和更强的推理能力。",
             ),
@@ -63,6 +64,7 @@ def _make_test_items() -> list[ContentItem]:
                 score=7.5,
                 summary="Linux kernel 7.0 released with performance gains and new hardware support.",
                 tags=["linux", "kernel", "performance"],
+                title_en="New Linux Kernel 7.0 Released",
                 title_zh="Linux 内核 7.0 发布",
                 lead_zh="Linux 内核 7.0 发布，带来显著性能提升和新硬件支持。",
             ),
@@ -74,6 +76,7 @@ def _sample_processing(
     score: float,
     summary: str,
     tags: list[str],
+    title_en: str,
     title_zh: str,
     lead_zh: str,
 ) -> ProcessingResult:
@@ -85,10 +88,21 @@ def _sample_processing(
             score=score, reason="Sample item", summary=summary, tags=tags
         ),
         artifacts={
+            "en": ContentArtifact(
+                language="en",
+                title=title_en,
+                blocks=[
+                    ContentBlock(
+                        id="summary",
+                        role="summary",
+                        title="Summary",
+                        content=summary,
+                    )
+                ],
+            ),
             "zh": ContentArtifact(
                 language="zh",
                 title=title_zh,
-                lead=lead_zh,
                 blocks=[
                     ContentBlock(
                         id="summary",
@@ -223,13 +237,13 @@ def main() -> None:
     parser.add_argument(
         "--delivery",
         default=None,
-        choices=["summary", "summary_and_items"],
+        choices=["summary", "overview", "summary_and_items"],
         help="Override the delivery mode from config for this test.",
     )
     args = parser.parse_args()
 
     try:
-        load_dotenv()
+        load_horizon_dotenv()
 
         storage = StorageManager(data_dir=str(Path("data")))
         try:
