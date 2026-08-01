@@ -14,6 +14,9 @@ _ASCII = r"[A-Za-z0-9]"
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()<>#!|])")
 _MARKDOWN_BLOCK_START = re.compile(r"(?m)^( {0,3})(>|[-+] |\d+[.)] )")
 _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
+_FRIEND_DIGEST_LIMIT = 12
+_FRIEND_DIGEST_FEATURED = 3
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？])|(?<=[.!?])(?=\s|$)")
 
 
 def _escape_markdown(value: object) -> str:
@@ -44,6 +47,17 @@ def _pangu(text: str) -> str:
     text = re.sub(rf"({_CJK})({_ASCII})", r"\1 \2", text)
     text = re.sub(rf"({_ASCII})({_CJK})", r"\1 \2", text)
     return text
+
+
+def _split_sentences(value: object) -> List[str]:
+    normalized = re.sub(r"\s+", " ", str(value)).strip()
+    if not normalized:
+        return []
+    return [
+        sentence.strip()
+        for sentence in _SENTENCE_BOUNDARY.split(normalized)
+        if sentence.strip()
+    ]
 
 
 LABELS = {
@@ -86,6 +100,40 @@ LABELS = {
             "2. 添加更多多样化的信息源\n"
             "3. 检查 AI 模型是否正常工作\n"
         ),
+    },
+}
+
+
+FRIEND_DIGEST_LABELS = {
+    "en": {
+        "title": "A few AI updates worth your time today",
+        "intro": (
+            "I went through today's updates and picked {count}. "
+            "These {featured} are worth starting with:"
+        ),
+        "what": "What happened",
+        "why": "Why it matters",
+        "key": "Key point",
+        "source": "Source",
+        "read_more": "Read more",
+        "more": "A few more, in one line each",
+        "closing": "If you only read one, start with the first.",
+        "empty": (
+            "I didn't find an AI update worth interrupting you for today. "
+            "I'll keep looking tomorrow."
+        ),
+    },
+    "zh": {
+        "title": "今天这几条 AI 动态值得看",
+        "intro": "我从今天的更新里挑了 {count} 条，先看最值得关注的 {featured} 条：",
+        "what": "发生了什么",
+        "why": "为什么值得看",
+        "key": "重点",
+        "source": "来源",
+        "read_more": "查看原文",
+        "more": "另外几条，一句话看完",
+        "closing": "如果今天只读一条，我建议先看第 1 条。",
+        "empty": "今天暂时没有筛到值得专门打扰你的 AI 动态，明天再继续看看。",
     },
 }
 
@@ -138,6 +186,34 @@ class DailySummarizer:
                 profile_id.replace("-", " ").replace("_", " ").title(),
             ),
         )
+
+    @staticmethod
+    def _references(
+        item: ContentItem, language: str
+    ) -> list[tuple[str, Optional[str]]]:
+        artifact = item.processing.artifacts.get(language) if item.processing else None
+        candidates = []
+        for source in item.metadata.get("sources", []):
+            if isinstance(source, dict):
+                candidates.append(
+                    (
+                        str(source.get("title") or source.get("source") or "Source"),
+                        str(source.get("url") or ""),
+                    )
+                )
+        if artifact:
+            candidates.extend((source.title, source.url) for source in artifact.sources)
+
+        references = []
+        seen = set()
+        for title, raw_url in candidates:
+            normalized = raw_url.strip()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            url = _safe_url(raw_url)
+            references.append((title, url))
+        return references
 
     def build_view(
         self,
@@ -255,6 +331,108 @@ class DailySummarizer:
         toc = "\n\n".join(toc_sections) + "\n\n---\n\n"
         return header + toc + "".join(body_sections)
 
+    @staticmethod
+    def _friend_source(item: ContentItem) -> str:
+        metadata = item.metadata
+        return str(
+            metadata.get("feed_name")
+            or metadata.get("repo")
+            or metadata.get("source_name")
+            or item.author
+            or item.source_type.value
+        )
+
+    @staticmethod
+    def _friend_content(item: ContentItem, language: str) -> tuple[str, List[str]]:
+        artifact = item.processing.artifacts.get(language) if item.processing else None
+        title = artifact.title if artifact and artifact.title else item.title
+        if not artifact:
+            return title, []
+        body = artifact.lead.strip()
+        if not body:
+            body = next(
+                (block.content.strip() for block in artifact.blocks if block.content.strip()),
+                "",
+            )
+        return title, _split_sentences(body)
+
+    def generate_friend_digest(
+        self,
+        items: List[ContentItem],
+        date: str,
+        total_fetched: int,
+        language: str = "en",
+    ) -> str:
+        """Render one deterministic, localized PushPlus friend digest."""
+        del date, total_fetched
+        labels = FRIEND_DIGEST_LABELS.get(language, FRIEND_DIGEST_LABELS["en"])
+        selected = items[:_FRIEND_DIGEST_LIMIT]
+        if not selected:
+            return f"# {labels['title']}\n\n{labels['empty']}"
+
+        featured_count = min(_FRIEND_DIGEST_FEATURED, len(selected))
+        lines = [
+            f"# {labels['title']}",
+            "",
+            labels["intro"].format(
+                count=len(selected),
+                featured=featured_count,
+            ),
+        ]
+
+        for index, item in enumerate(selected[:featured_count], start=1):
+            raw_title, sentences = self._friend_content(item, language)
+            title = _escape_markdown(raw_title)
+            source = _escape_markdown(self._friend_source(item))
+            if language == "zh":
+                title = _pangu(title)
+                source = _pangu(source)
+            url = _safe_url(item.url)
+            title_link = f"[{title}]({url})" if url else title
+            lines.extend(["", f"## {index}. {title_link}"])
+
+            escaped_sentences = [_escape_markdown(sentence) for sentence in sentences]
+            if language == "zh":
+                escaped_sentences = [_pangu(sentence) for sentence in escaped_sentences]
+            if len(escaped_sentences) >= 2:
+                lines.extend(
+                    [
+                        "",
+                        f"**{labels['what']}:** {escaped_sentences[0]}",
+                        "",
+                        f"**{labels['why']}:** {' '.join(escaped_sentences[1:3])}",
+                    ]
+                )
+            elif escaped_sentences:
+                lines.extend(["", f"**{labels['key']}:** {escaped_sentences[0]}"])
+
+            source_line = f"**{labels['source']}:** {source}"
+            if url:
+                source_line += f" · [{labels['read_more']}]({url})"
+            lines.extend(["", source_line])
+
+        remaining = selected[featured_count:]
+        if remaining:
+            lines.extend(["", f"## {labels['more']}", ""])
+            for index, item in enumerate(remaining, start=featured_count + 1):
+                raw_title, sentences = self._friend_content(item, language)
+                title = _escape_markdown(raw_title)
+                source = _escape_markdown(self._friend_source(item))
+                summary = _escape_markdown(sentences[0]) if sentences else ""
+                if language == "zh":
+                    title = _pangu(title)
+                    source = _pangu(source)
+                    summary = _pangu(summary)
+                url = _safe_url(item.url)
+                title_link = f"[{title}]({url})" if url else title
+                detail = f"：{summary}" if language == "zh" and summary else ""
+                if language != "zh" and summary:
+                    detail = f" — {summary}"
+                lines.append(f"{index}. {title_link}{detail} · {source}")
+
+        lines.extend(["", labels["closing"]])
+        return "\n".join(lines)
+
     def generate_webhook_overview(
         self,
         items: List[ContentItem],
@@ -297,6 +475,17 @@ class DailySummarizer:
                     f"{view_item.index}. {title_link} "
                     f"\u2b50\ufe0f {view_item.score}/10"
                 )
+                references = self._references(view_item.item, language)
+                if references:
+                    source_links = " · ".join(
+                        (
+                            f"[{_escape_markdown(reference_title)}]({reference_url})"
+                            if reference_url
+                            else _escape_markdown(reference_title)
+                        )
+                        for reference_title, reference_url in references
+                    )
+                    entries.append(f"   {labels['source']}: {source_links}")
             sections.append("\n".join(entries))
 
         return header + "\n\n".join(sections)
@@ -407,16 +596,17 @@ class DailySummarizer:
                     ["", f"{'#' * (heading_level + 1)} {block_title}", "", block_content]
                 )
 
-        sources = artifact.sources if artifact else []
-        if sources:
+        references = self._references(item, language)
+        if references:
             reference_items = []
-            for source in sources:
-                reference_title = html.escape(source.title, quote=True)
-                reference_url = _safe_url(source.url)
+            for reference_title, reference_url in references:
+                safe_title = html.escape(reference_title, quote=True)
                 if reference_url:
-                    reference_items.append(f'<li><a href="{reference_url}">{reference_title}</a></li>\n')
+                    reference_items.append(
+                        f'<li><a href="{reference_url}">{safe_title}</a></li>\n'
+                    )
                 else:
-                    reference_items.append(f"<li>{reference_title}</li>\n")
+                    reference_items.append(f"<li>{safe_title}</li>\n")
             items_html = "".join(reference_items)
             lines += [
                 "",

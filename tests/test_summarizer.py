@@ -53,6 +53,136 @@ def _make_item(idx: int) -> ContentItem:
     return item
 
 
+def _make_friend_item(idx: int) -> ContentItem:
+    item = _make_item(idx)
+    item.metadata["feed_name"] = "Example Feed"
+    item.processing.artifacts = {
+        "en": ContentArtifact(
+            language="en",
+            title=f"English Item {idx}",
+            blocks=[
+                ContentBlock(
+                    id="summary",
+                    role="summary",
+                    title="Summary",
+                    content=(
+                        f"Event {idx} happened. "
+                        f"It matters to technical teams {idx}. "
+                        f"A final detail for item {idx}."
+                    ),
+                )
+            ],
+        ),
+        "zh": ContentArtifact(
+            language="zh",
+            title=f"中文条目 {idx}",
+            blocks=[
+                ContentBlock(
+                    id="summary",
+                    role="summary",
+                    title="摘要",
+                    content=(
+                        f"事件 {idx} 已经发生。"
+                        f"它会影响技术团队 {idx}。"
+                        f"这是条目 {idx} 的补充细节。"
+                    ),
+                )
+            ],
+        ),
+    }
+    return item
+
+
+def test_generate_friend_digest_features_three_and_summarizes_nine():
+    items = [_make_friend_item(index) for index in range(1, 14)]
+
+    result = DailySummarizer().generate_friend_digest(
+        items,
+        date="2026-07-31",
+        total_fetched=30,
+        language="en",
+    )
+
+    assert result.startswith("# A few AI updates worth your time today")
+    assert "## 1. [English Item 1](https://example.com/items/1)" in result
+    assert "**What happened:** Event 1 happened." in result
+    assert (
+        "**Why it matters:** It matters to technical teams 1. "
+        "A final detail for item 1."
+    ) in result
+    assert "## A few more, in one line each" in result
+    assert "4. [English Item 4](https://example.com/items/4)" in result
+    assert "Event 4 happened." in result
+    assert "It matters to technical teams 4." not in result
+    assert "English Item 12" in result
+    assert "English Item 13" not in result
+    assert "⭐️" not in result
+    assert result.index("English Item 1") < result.index("English Item 12")
+
+
+def test_generate_friend_digest_uses_only_the_requested_language():
+    item = _make_friend_item(1)
+
+    result = DailySummarizer().generate_friend_digest(
+        [item], "2026-07-31", 1, language="zh"
+    )
+
+    assert "中文条目 1" in result
+    assert "事件 1 已经发生。" in result
+    assert "它会影响技术团队 1。" in result
+    assert "English Item" not in result
+    assert "Event 1 happened." not in result
+
+
+def test_generate_friend_digest_does_not_cross_language_fallback():
+    item = _make_friend_item(1)
+    del item.processing.artifacts["zh"]
+
+    result = DailySummarizer().generate_friend_digest(
+        [item], "2026-07-31", 1, language="zh"
+    )
+
+    assert "Important Item 1" in result
+    assert "Event 1 happened." not in result
+    assert "发生了什么" not in result
+    assert "为什么值得看" not in result
+
+
+def test_generate_friend_digest_uses_key_point_for_one_sentence():
+    item = _make_friend_item(1)
+    item.processing.artifacts["en"].blocks[0].content = "One supported sentence."
+
+    result = DailySummarizer().generate_friend_digest(
+        [item], "2026-07-31", 1, language="en"
+    )
+
+    assert "**Key point:** One supported sentence." in result
+    assert "**Why it matters:**" not in result
+
+
+def test_generate_friend_digest_empty_copy_is_natural_and_not_diagnostic():
+    result = DailySummarizer().generate_friend_digest(
+        [], "2026-07-31", 19, language="zh"
+    )
+
+    assert "今天暂时没有筛到值得专门打扰你的 AI 动态" in result
+    assert "阈值" not in result
+    assert "配置" not in result
+
+
+def test_generate_friend_digest_escapes_text_and_omits_unsafe_url():
+    item = _make_friend_item(1)
+    item.processing.artifacts["en"].title = "Model [update]"
+    item.url = "javascript:alert(1)"
+
+    result = DailySummarizer().generate_friend_digest(
+        [item], "2026-07-31", 1, language="en"
+    )
+
+    assert "Model \\[update\\]" in result
+    assert "javascript:" not in result
+
+
 def test_generate_webhook_overview_lists_items_without_full_details():
     summarizer = DailySummarizer()
     items = [_make_item(1), _make_item(2)]
