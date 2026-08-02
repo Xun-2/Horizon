@@ -424,6 +424,64 @@ class DailySummarizer:
         lines.extend(["", labels["closing"]])
         return "\n".join(lines)
 
+    def generate_clawbot_digest(
+        self,
+        items: List[ContentItem],
+        date: str,
+        language: str,
+        page_url: str | None,
+    ) -> str:
+        """Render one deterministic plain-text digest for ClawBot."""
+        safe_page_url = None
+        if page_url:
+            raw_url = page_url.strip()
+            try:
+                parsed = urlsplit(raw_url)
+                parsed.port
+            except ValueError as exc:
+                raise ValueError("page_url must be an absolute HTTP(S) URL") from exc
+            if (
+                any(ord(char) < 32 or ord(char) == 127 for char in raw_url)
+                or parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise ValueError("page_url must be an absolute HTTP(S) URL")
+            safe_page_url = raw_url
+
+        selected = items[:3]
+        if language == "zh":
+            lines = [f"早上好，这是 {date} 的 AI 日报速览。"]
+            unavailable = "完整日报暂未发布，请稍后再试。"
+            link_label = "完整日报"
+        else:
+            lines = [f"Good morning. Here is your AI briefing for {date}."]
+            unavailable = "The full report is not published yet. Please try again later."
+            link_label = "Full report"
+
+        for index, item in enumerate(selected, start=1):
+            title, sentences = self._friend_content(item, language)
+            normalized_title = re.sub(r"\s+", " ", title).strip()
+            conclusion = (
+                re.sub(r"\s+", " ", sentences[0]).strip() if sentences else ""
+            )
+            line = f"{index}. {normalized_title}"
+            if conclusion:
+                line += f" - {conclusion}"
+            lines.append(line)
+
+        if not selected:
+            lines.append(
+                "今天暂无达到阈值的动态。"
+                if language == "zh"
+                else "No updates met today's threshold."
+            )
+        lines.append(
+            f"{link_label}: {safe_page_url}" if safe_page_url else unavailable
+        )
+        return "\n".join(lines)
+
     def generate_webhook_overview(
         self,
         items: List[ContentItem],

@@ -16,6 +16,10 @@ from ..ai.markdown_utils import clean_app_summary_markdown
 from ..console_icons import get_icons
 from ..models import ContentItem, WebhookConfig
 from ..ai.summarizer import DailySummarizer
+from .pushplus import (
+    PushPlusClawBotClient,
+    PushPlusDeliveryState,
+)
 from ..url_security import UnsafeURLError, safe_request, validate_http_url
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,9 @@ class WebhookDeliveryStatus(str, Enum):
     SUCCESS = "success"
     HTTP_FAILURE = "http_failure"
     PLATFORM_FAILURE = "platform_failure"
+    DELIVERY_FAILED = "delivery_failed"
+    DELIVERY_TIMEOUT = "delivery_timeout"
+    CHANNEL_INACTIVE = "channel_inactive"
     NETWORK_FAILURE = "network_failure"
     INTERNAL_FAILURE = "internal_failure"
 
@@ -47,6 +54,15 @@ class WebhookDeliveryResult:
         result["status"] = self.status.value
         result["sent"] = self.sent
         return result
+
+
+PUSHPLUS_STATUS_MAP = {
+    PushPlusDeliveryState.DELIVERED: WebhookDeliveryStatus.SUCCESS,
+    PushPlusDeliveryState.INACTIVE: WebhookDeliveryStatus.CHANNEL_INACTIVE,
+    PushPlusDeliveryState.FAILED: WebhookDeliveryStatus.DELIVERY_FAILED,
+    PushPlusDeliveryState.TIMED_OUT: WebhookDeliveryStatus.DELIVERY_TIMEOUT,
+    PushPlusDeliveryState.API_FAILURE: WebhookDeliveryStatus.PLATFORM_FAILURE,
+}
 
 
 # Pattern: #{key} or #{key?param1=val1&param2=val2}
@@ -291,7 +307,13 @@ def _sensitive_values(value: Any) -> set[str]:
 class WebhookNotifier:
     """Sends webhook notifications after pipeline completion or failure."""
 
-    def __init__(self, config: WebhookConfig, console=None, icons=None):
+    def __init__(
+        self,
+        config: WebhookConfig,
+        console=None,
+        icons=None,
+        pushplus_client=None,
+    ):
         self.config = config
         self.console = console if console is not None else Console(stderr=True)
         self.icons = icons if icons is not None else get_icons()
@@ -300,7 +322,38 @@ class WebhookNotifier:
         self._configured_secrets.update(
             _sensitive_values(_extract_headers(config.headers))
         )
+        self.pushplus_client = pushplus_client
+        self._pushplus_client_factory = None
         self._validate_config()  # sets self.url or raises ValueError
+        if (
+            self.pushplus_client is None
+            and config.enabled
+            and config.platform == "pushplus"
+            and config.pushplus is not None
+            and self.url is not None
+        ):
+            token = os.getenv(config.pushplus.token_env)
+            secret_key = os.getenv(config.pushplus.secret_key_env)
+            if not token:
+                raise ValueError(
+                    f"Missing environment variable: {config.pushplus.token_env}"
+                )
+            if not secret_key:
+                raise ValueError(
+                    f"Missing environment variable: {config.pushplus.secret_key_env}"
+                )
+            self._configured_secrets.update({token, secret_key})
+            self._pushplus_client_factory = lambda: PushPlusClawBotClient(
+                endpoint=self.url or "",
+                user_token=token,
+                secret_key=secret_key,
+                status_timeout_seconds=(
+                    config.pushplus.status_timeout_seconds
+                ),
+                poll_interval_seconds=(
+                    config.pushplus.poll_interval_seconds
+                ),
+            )
 
     def _redact_configured_secrets(self, value: str) -> str:
         """Mask configured secret values if a remote service echoes them."""
@@ -525,6 +578,7 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        page_url: str | None = None,
     ) -> List[dict[str, Any]]:
         """Build the variables for all webhook messages for one language."""
         webhook_languages = getattr(self.config, "languages", None)
@@ -569,10 +623,29 @@ class WebhookNotifier:
         delivery = getattr(self.config, "delivery", "summary")
         if delivery in {"overview", "summary_and_items"}:
             item_messages: List[dict[str, Any]] = []
-            use_friend_digest = (
-                self.config.platform == "pushplus" and delivery == "overview"
+            use_clawbot_digest = (
+                self.config.platform == "pushplus"
+                and self.config.pushplus is not None
+                and delivery == "overview"
             )
-            if use_friend_digest:
+            use_friend_digest = (
+                self.config.platform == "pushplus"
+                and self.config.pushplus is None
+                and delivery == "overview"
+            )
+            if use_clawbot_digest:
+                overview = summarizer.generate_clawbot_digest(
+                    important_items,
+                    date,
+                    language=lang,
+                    page_url=page_url,
+                )
+                message_title = (
+                    "今天这几条 AI 动态值得看"
+                    if lang == "zh"
+                    else "A few AI updates worth your time today"
+                )
+            elif use_friend_digest:
                 overview = summarizer.generate_friend_digest(
                     important_items,
                     date,
@@ -884,7 +957,8 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
-    ) -> None:
+        page_url: str | None = None,
+    ) -> List[WebhookDeliveryResult]:
         """Send daily summary webhook notification.
 
         Handles language filtering, delivery mode (summary vs summary_and_items),
@@ -905,19 +979,65 @@ class WebhookNotifier:
             date=date,
             lang=lang,
             summarizer=summarizer,
+            page_url=page_url,
         )
         if not messages:
             self.console.print(
                 f"{self.icons['webhook_skip']} Skipping {lang.upper()} webhook notification "
                 f"(filtered by webhook.languages)"
             )
-            return
+            return []
 
         self.console.print(
             f"{self.icons['webhook']} Sending {lang.upper()} webhook notification..."
         )
-        for message in messages:
-            await self.notify(message)
+        if self.config.platform == "pushplus" and self.config.pushplus is not None:
+            if not self.config.enabled:
+                return [
+                    WebhookDeliveryResult(WebhookDeliveryStatus.DISABLED)
+                    for _ in messages
+                ]
+            delivery_client = self.pushplus_client
+            owns_delivery_client = False
+            if delivery_client is None and self._pushplus_client_factory is not None:
+                delivery_client = self._pushplus_client_factory()
+                owns_delivery_client = True
+            if delivery_client is None:
+                return [
+                    WebhookDeliveryResult(
+                        WebhookDeliveryStatus.SKIPPED,
+                        detail="PushPlus ClawBot client is not configured",
+                    )
+                    for _ in messages
+                ]
+            try:
+                results = []
+                for message in messages:
+                    report = await delivery_client.send_and_wait(
+                        message["message_title"], message["summary"]
+                    )
+                    status = PUSHPLUS_STATUS_MAP.get(
+                        report.state, WebhookDeliveryStatus.PLATFORM_FAILURE
+                    )
+                    detail = self._redact_configured_secrets(report.detail or "")
+                    result = WebhookDeliveryResult(
+                        status=status,
+                        detail=detail or None,
+                        error_type=report.state.value,
+                    )
+                    results.append(result)
+                    if result.sent:
+                        self.console.print("[green]ClawBot 已送达[/green]")
+                    else:
+                        self.console.print(
+                            f"[yellow]ClawBot 投递未完成: {report.state.value}[/yellow]"
+                        )
+                return results
+            finally:
+                if owns_delivery_client:
+                    await delivery_client.aclose()
+
+        return [await self.notify(message) for message in messages]
 
     async def send_failure(
         self,

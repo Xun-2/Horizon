@@ -211,6 +211,45 @@ def test_generate_friend_digest_empty_copy_is_natural_and_not_diagnostic():
     assert "配置" not in result
 
 
+def test_clawbot_digest_is_plain_text_with_three_items_and_page_link():
+    items = [_make_friend_item(index) for index in range(1, 6)]
+
+    text = DailySummarizer().generate_clawbot_digest(
+        items,
+        "2026-08-02",
+        language="zh",
+        page_url="https://xun-2.github.io/Horizon/daily/2026-08-02/zh.html",
+    )
+
+    assert text.count("\n1. ") == 1
+    assert "\n2. " in text and "\n3. " in text
+    assert "\n4. " not in text
+    assert "https://xun-2.github.io/Horizon/daily/2026-08-02/zh.html" in text
+    assert all(marker not in text for marker in ("# ", "**", "[", "]("))
+
+
+def test_clawbot_digest_without_page_reports_publish_failure():
+    text = DailySummarizer().generate_clawbot_digest(
+        [_make_friend_item(1)],
+        "2026-08-02",
+        language="zh",
+        page_url=None,
+    )
+
+    assert "完整日报暂未发布" in text
+    assert "http" not in text
+
+
+def test_clawbot_digest_rejects_non_http_page_url():
+    with pytest.raises(ValueError, match="page_url"):
+        DailySummarizer().generate_clawbot_digest(
+            [_make_friend_item(1)],
+            "2026-08-02",
+            language="en",
+            page_url="javascript:alert(1)",
+        )
+
+
 def test_generate_friend_digest_escapes_text_and_omits_unsafe_url():
     item = _make_friend_item(1)
     item.processing.artifacts["en"].title = "Model [update]"

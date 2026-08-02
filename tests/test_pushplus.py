@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from unittest.mock import MagicMock
@@ -5,7 +6,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from src.models import WebhookConfig
+from src.models import PushPlusClawBotConfig, WebhookConfig
+from src.services.pushplus import PushPlusDeliveryReport, PushPlusDeliveryState
 from src.services.webhook import (
     WebhookDeliveryStatus,
     WebhookNotifier,
@@ -281,3 +283,147 @@ def test_webhook_config_accepts_pushplus_overview_mode():
 
     assert config.delivery == "overview"
     assert config.platform == "pushplus"
+
+
+class FakeClawBotClient:
+    def __init__(self, state):
+        self.state = state
+        self.calls = []
+
+    async def send_and_wait(self, title, content):
+        self.calls.append((title, content))
+        return PushPlusDeliveryReport(state=self.state, short_code="receipt")
+
+
+@pytest.mark.parametrize(
+    ("provider_state", "webhook_state"),
+    [
+        (PushPlusDeliveryState.DELIVERED, WebhookDeliveryStatus.SUCCESS),
+        (
+            PushPlusDeliveryState.INACTIVE,
+            WebhookDeliveryStatus.CHANNEL_INACTIVE,
+        ),
+        (
+            PushPlusDeliveryState.FAILED,
+            WebhookDeliveryStatus.DELIVERY_FAILED,
+        ),
+        (
+            PushPlusDeliveryState.TIMED_OUT,
+            WebhookDeliveryStatus.DELIVERY_TIMEOUT,
+        ),
+    ],
+)
+def test_clawbot_final_state_controls_webhook_success(
+    provider_state, webhook_state, monkeypatch
+):
+    monkeypatch.setenv(TEST_URL_ENV, TEST_URL)
+    fake = FakeClawBotClient(provider_state)
+    notifier = WebhookNotifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            delivery="overview",
+            platform="pushplus",
+            pushplus=PushPlusClawBotConfig(),
+        ),
+        pushplus_client=fake,
+    )
+    summarizer = MagicMock()
+    summarizer.generate_clawbot_digest.return_value = "plain digest"
+
+    results = asyncio.run(
+        notifier.send_daily_summary(
+            summary="markdown summary",
+            important_items=[],
+            all_items_count=0,
+            date="2026-08-02",
+            lang="zh",
+            summarizer=summarizer,
+            page_url="https://xun-2.github.io/Horizon/daily/2026-08-02/zh.html",
+        )
+    )
+
+    assert results[0].status == webhook_state
+    assert results[0].sent is (
+        provider_state == PushPlusDeliveryState.DELIVERED
+    )
+    assert fake.calls == [("今天这几条 AI 动态值得看", "plain digest")]
+
+
+def test_clawbot_message_builder_passes_page_url_to_plain_digest(monkeypatch):
+    monkeypatch.setenv(TEST_URL_ENV, TEST_URL)
+    notifier = WebhookNotifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            delivery="overview",
+            platform="pushplus",
+            pushplus=PushPlusClawBotConfig(),
+        ),
+        pushplus_client=FakeClawBotClient(PushPlusDeliveryState.DELIVERED),
+    )
+    summarizer = MagicMock()
+    summarizer.generate_clawbot_digest.return_value = "plain digest"
+
+    messages = notifier.build_daily_summary_messages(
+        summary="markdown",
+        important_items=[],
+        all_items_count=12,
+        date="2026-08-02",
+        lang="en",
+        summarizer=summarizer,
+        page_url="https://xun-2.github.io/Horizon/daily/2026-08-02/en.html",
+    )
+
+    assert messages[0]["summary"] == "plain digest"
+    summarizer.generate_clawbot_digest.assert_called_once_with(
+        [],
+        "2026-08-02",
+        language="en",
+        page_url="https://xun-2.github.io/Horizon/daily/2026-08-02/en.html",
+    )
+
+
+def test_clawbot_owned_client_is_closed_after_language_delivery(monkeypatch):
+    monkeypatch.setenv(TEST_URL_ENV, TEST_URL)
+    monkeypatch.setenv("PUSHPLUS_TOKEN", "user-token")
+    monkeypatch.setenv("PUSHPLUS_SECRET_KEY", "secret-key")
+
+    class ClosingClient(FakeClawBotClient):
+        def __init__(self):
+            super().__init__(PushPlusDeliveryState.DELIVERED)
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    fake = ClosingClient()
+    monkeypatch.setattr(
+        "src.services.webhook.PushPlusClawBotClient",
+        lambda **kwargs: fake,
+    )
+    notifier = WebhookNotifier(
+        WebhookConfig(
+            enabled=True,
+            url_env=TEST_URL_ENV,
+            delivery="overview",
+            platform="pushplus",
+            pushplus=PushPlusClawBotConfig(),
+        )
+    )
+    summarizer = MagicMock()
+    summarizer.generate_clawbot_digest.return_value = "plain digest"
+
+    asyncio.run(
+        notifier.send_daily_summary(
+            summary="markdown",
+            important_items=[],
+            all_items_count=0,
+            date="2026-08-02",
+            lang="zh",
+            summarizer=summarizer,
+            page_url=None,
+        )
+    )
+
+    assert fake.closed is True
