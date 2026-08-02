@@ -450,6 +450,64 @@ class SourcesConfig(BaseModel):
     google_news: Optional[GoogleNewsConfig] = None
 
 
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class PushPlusClawBotConfig(BaseModel):
+    channel: Literal["clawbot"] = "clawbot"
+    template: Literal["txt"] = "txt"
+    token_env: str = "PUSHPLUS_TOKEN"
+    secret_key_env: str = "PUSHPLUS_SECRET_KEY"
+    status_timeout_seconds: int = Field(default=90, ge=10, le=300)
+    poll_interval_seconds: float = Field(default=2.0, gt=0, le=10)
+
+    @field_validator("token_env", "secret_key_env")
+    @classmethod
+    def validate_environment_name(cls, value: str) -> str:
+        if not _ENV_NAME.fullmatch(value):
+            raise ValueError("environment variable name is invalid")
+        return value
+
+
+class GitHubPagesConfig(BaseModel):
+    enabled: bool = False
+    repository: str = "Xun-2/Horizon"
+    source_branch: str = "main"
+    branch: str = "gh-pages"
+    token_env: str = "HORIZON_GITHUB_TOKEN"
+    site_url: str = "https://xun-2.github.io/Horizon"
+    verify_timeout_seconds: int = Field(default=120, ge=10, le=300)
+    poll_interval_seconds: float = Field(default=2.0, gt=0, le=10)
+
+    @field_validator("repository")
+    @classmethod
+    def validate_repository(cls, value: str) -> str:
+        if value != "Xun-2/Horizon":
+            raise ValueError("repository must be Xun-2/Horizon")
+        return value
+
+    @field_validator("source_branch", "branch")
+    @classmethod
+    def validate_branch(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", value) or ".." in value:
+            raise ValueError("branch name is invalid")
+        return value
+
+    @field_validator("token_env")
+    @classmethod
+    def validate_token_environment(cls, value: str) -> str:
+        if not _ENV_NAME.fullmatch(value):
+            raise ValueError("environment variable name is invalid")
+        return value
+
+    @field_validator("site_url")
+    @classmethod
+    def validate_site_url(cls, value: str) -> str:
+        if value.rstrip("/") != "https://xun-2.github.io/Horizon":
+            raise ValueError("site_url must be the approved public Horizon URL")
+        return value.rstrip("/")
+
+
 class WebhookConfig(BaseModel):
     """Webhook notification configuration."""
 
@@ -470,6 +528,7 @@ class WebhookConfig(BaseModel):
     languages: Optional[List[str]] = (
         None  # Optional language filter for webhook delivery; defaults to all AI languages
     )
+    pushplus: Optional[PushPlusClawBotConfig] = None
     enabled: bool = False
 
     @field_validator("delivery")
@@ -600,3 +659,4 @@ class Config(BaseModel):
     extractors: Dict[str, ExtractorConfig] = Field(default_factory=dict)
     email: Optional[EmailConfig] = None
     webhook: Optional[WebhookConfig] = None
+    github_pages: Optional[GitHubPagesConfig] = None
