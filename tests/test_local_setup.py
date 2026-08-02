@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,12 @@ from src.services.pushplus import PushPlusDeliveryReport, PushPlusDeliveryState
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_local_setup.py"
 CONFIG = ROOT / "data" / "config.local.example.json"
+
+
+def test_setup_checker_does_not_depend_on_untracked_environment_module(monkeypatch):
+    monkeypatch.setitem(sys.modules, "src.environment", None)
+
+    importlib.reload(check_local_setup)
 
 
 def _environment(*, include_secrets: bool) -> dict[str, str]:
@@ -169,6 +176,41 @@ def test_delivery_probe_publishes_before_clawbot_and_requires_final_state(monkey
     assert "health/setup-check.html" in events[1]
 
 
+def test_delivery_probe_reports_ordered_success_stages(monkeypatch, capsys):
+    environment = _environment(include_secrets=True)
+    config, issues = check_local_setup.check_offline(CONFIG, environment)
+    assert not issues
+
+    class FakePublisher:
+        async def publish_health_check(self):
+            return "https://xun-2.github.io/Horizon/health/setup-check.html"
+
+    class FakeClawBot:
+        async def send_and_wait(self, title, content):
+            return PushPlusDeliveryReport(
+                state=PushPlusDeliveryState.DELIVERED,
+                short_code="receipt",
+            )
+
+    monkeypatch.setattr(
+        check_local_setup,
+        "_build_page_publisher",
+        lambda config: FakePublisher(),
+    )
+    monkeypatch.setattr(
+        check_local_setup,
+        "_build_clawbot_client",
+        lambda config: FakeClawBot(),
+    )
+
+    assert asyncio.run(check_local_setup._check_delivery(config)) == []
+    assert capsys.readouterr().out.splitlines() == [
+        "GitHub Pages test page is public",
+        "ClawBot request accepted",
+        "ClawBot 已送达",
+    ]
+
+
 def test_legacy_openai_key_does_not_satisfy_aoligei_token_requirement():
     environment = _environment(include_secrets=False)
     environment.update(
@@ -199,6 +241,28 @@ def test_local_contract_rejects_legacy_api_key_env_name(tmp_path):
 
     assert config is not None
     assert "AI key environment variable must be AOLIGEI_API_KEY" in issues
+
+
+def test_local_contract_requires_fixed_pushplus_webhook_name_and_url(tmp_path):
+    raw = json.loads(CONFIG.read_text(encoding="utf-8"))
+    raw["webhook"]["url_env"] = "OTHER_WEBHOOK_URL"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    environment = _environment(include_secrets=True)
+    environment["OTHER_WEBHOOK_URL"] = "https://www.pushplus.plus/send"
+
+    config, issues = check_local_setup.check_offline(config_path, environment)
+
+    assert config is not None
+    assert "Webhook URL environment variable must be HORIZON_WEBHOOK_URL" in issues
+
+    environment = _environment(include_secrets=True)
+    environment["HORIZON_WEBHOOK_URL"] = "https://example.invalid/send"
+
+    config, issues = check_local_setup.check_offline(CONFIG, environment)
+
+    assert config is not None
+    assert "Webhook URL must be https://www.pushplus.plus/send" in issues
 
 
 def test_online_check_uses_orchestrator_time_window(monkeypatch):

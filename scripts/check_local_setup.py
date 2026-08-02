@@ -16,7 +16,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.ai.client import create_ai_client  # noqa: E402
-from src.environment import load_horizon_dotenv  # noqa: E402
 from src.models import Config  # noqa: E402
 from src.orchestrator import HorizonOrchestrator  # noqa: E402
 from src.services.github_pages import GitHubPagesPublisher  # noqa: E402
@@ -28,7 +27,25 @@ from src.storage.manager import StorageManager  # noqa: E402
 
 
 ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 FORBIDDEN_SOURCES = ("twitter", "openbb", "gdelt", "google_news")
+
+
+def _load_dotenv(path: Path, *, override: bool) -> None:
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+    for line in lines:
+        name, separator, value = line.partition("=")
+        name = name.strip()
+        if not separator or not name or name.startswith("#"):
+            continue
+        if ENV_NAME.fullmatch(name) and (override or name not in os.environ):
+            os.environ[name] = value.strip()
 
 
 def _walk_strings(value: Any):
@@ -76,7 +93,7 @@ def _expand_environment(value: Any, environment: Mapping[str, str]) -> Any:
     return value
 
 
-def _contract_issues(config: Config) -> list[str]:
+def _contract_issues(config: Config, environment: Mapping[str, str]) -> list[str]:
     issues: list[str] = []
     if config.ai.provider.value != "openai":
         issues.append("AI provider must be openai")
@@ -117,6 +134,10 @@ def _contract_issues(config: Config) -> list[str]:
             issues.append("Webhook platform must be pushplus")
         if webhook.delivery != "overview":
             issues.append("Webhook delivery must be overview")
+        if webhook.url_env != "HORIZON_WEBHOOK_URL":
+            issues.append("Webhook URL environment variable must be HORIZON_WEBHOOK_URL")
+        if environment.get("HORIZON_WEBHOOK_URL") != "https://www.pushplus.plus/send":
+            issues.append("Webhook URL must be https://www.pushplus.plus/send")
         if webhook.pushplus is None:
             issues.append("PushPlus ClawBot configuration is required")
         else:
@@ -155,7 +176,7 @@ def check_offline(
         config = Config.model_validate(_expand_environment(raw, environment))
     except Exception:
         return None, ["Configuration does not match the Horizon schema"]
-    return config, _contract_issues(config)
+    return config, _contract_issues(config, environment)
 
 
 def _safe_probe_error(component: str, exc: Exception) -> str:
@@ -235,6 +256,7 @@ async def _check_delivery(config: Config) -> list[str]:
         public_url = await _build_page_publisher(config).publish_health_check()
     except Exception as exc:
         return [_safe_probe_error("GitHub Pages", exc)]
+    print("GitHub Pages test page is public")
 
     try:
         report = await _build_clawbot_client(config).send_and_wait(
@@ -243,8 +265,11 @@ async def _check_delivery(config: Config) -> list[str]:
         )
     except Exception as exc:
         return [_safe_probe_error("PushPlus", exc)]
+    if report.short_code:
+        print("ClawBot request accepted")
     if report.state != PushPlusDeliveryState.DELIVERED:
         return [f"PushPlus delivery probe ended in state: {report.state.value}"]
+    print("ClawBot 已送达")
     return []
 
 
@@ -276,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.test_delivery and not args.online:
         parser.error("--test-delivery requires --online")
 
-    load_horizon_dotenv(args.env_file, override=False)
+    _load_dotenv(args.env_file, override=False)
     config, issues = check_offline(args.config, os.environ)
     if issues:
         for issue in issues:
