@@ -4,6 +4,7 @@ import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 from urllib.parse import unquote_plus, urlsplit
@@ -12,8 +13,10 @@ from rich.console import Console
 
 from .console_icons import get_icons
 from .models import Config, ContentItem
-from .storage.manager import StorageManager, safe_output_path
+from .storage.manager import StorageManager
 from .services.email import EmailManager
+from .services.daily_pages import build_daily_page_bundle
+from .services.github_pages import GitHubPagesPublisher
 from .services.webhook import WebhookNotifier
 from .scrapers.github import GitHubScraper
 from .scrapers.hackernews import HackerNewsScraper
@@ -176,6 +179,7 @@ class HorizonOrchestrator:
         storage: StorageManager,
         console: Optional[Console] = None,
         profiles: Optional[ProfileRegistry] = None,
+        page_publisher: Optional[GitHubPagesPublisher] = None,
     ):
         """Initialize orchestrator.
 
@@ -200,6 +204,18 @@ class HorizonOrchestrator:
             if config.webhook and config.webhook.enabled
             else None
         )
+        self._owns_page_publisher = False
+        self.page_publisher = page_publisher
+        if (
+            self.page_publisher is None
+            and config.github_pages
+            and config.github_pages.enabled
+        ):
+            self.page_publisher = GitHubPagesPublisher(
+                config.github_pages,
+                token=os.environ[config.github_pages.token_env],
+            )
+            self._owns_page_publisher = True
         self.last_fetch_report: Optional[FetchReport] = None
 
     async def run(self, force_hours: int = None) -> None:
@@ -235,12 +251,17 @@ class HorizonOrchestrator:
             self.console.print(
                 f"{self.icons['fetched']} Fetched {len(all_items)} items from all sources\n"
             )
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
             if self.last_fetch_report and self.last_fetch_report.all_failed:
                 raise RuntimeError(self.last_fetch_report.failure_message())
 
             if not all_items:
-                self.console.print("[yellow]No new content found. Exiting.[/yellow]")
+                await self._deliver_daily([], 0, today)
+                self.console.print(
+                    f"[bold green]{self.icons['success']} "
+                    "Horizon completed successfully![/bold green]"
+                )
                 return
 
             # 3. Merge cross-source duplicates (same URL from different sources)
@@ -276,78 +297,8 @@ class HorizonOrchestrator:
             # 6. Search related stories + enrich with background knowledge (2nd AI pass)
             await self.enrich_items(important_items)
 
-            # 7. Generate and save daily summaries for each configured language
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            for lang in self.config.ai.languages:
-                summarizer = DailySummarizer(profile_names=self.profiles.names)
-                summary = await summarizer.generate_summary(important_items, today, len(all_items), language=lang)
-
-                # Save to data/summaries/
-                summary_path = self.storage.save_daily_summary(today, summary, language=lang)
-                self.console.print(
-                    f"{self.icons['save']} Saved {lang.upper()} summary to: {summary_path}\n"
-                )
-
-                # Copy to docs/ for GitHub Pages
-                try:
-                    from pathlib import Path
-
-                    post_filename = f"{today}-summary-{lang}.md"
-                    posts_dir = Path("docs/_posts")
-                    posts_dir.mkdir(parents=True, exist_ok=True)
-
-                    dest_path = safe_output_path(posts_dir, post_filename)
-
-                    # Add Jekyll front matter
-                    front_matter = (
-                        "---\n"
-                        "layout: default\n"
-                        f"title: \"Horizon Summary: {today} ({lang.upper()})\"\n"
-                        f"date: {today}\n"
-                        f"lang: {lang}\n"
-                        "---\n\n"
-                    )
-
-                    # Strip leading H1 header to avoid duplication with Jekyll title
-                    summary_content = summary
-                    first_line = summary_content.strip().split("\n")[0]
-                    if first_line.startswith("# "):
-                        parts = summary_content.split("\n", 1)
-                        if len(parts) > 1:
-                            summary_content = parts[1].strip()
-
-                    with open(dest_path, "w", encoding="utf-8") as f:
-                        f.write(front_matter + summary_content)
-
-                    self.console.print(
-                        f"{self.icons['document']} Copied {lang.upper()} summary "
-                        f"to GitHub Pages: {dest_path}\n"
-                    )
-                except Exception as e:
-                    self.console.print(
-                        f"[yellow]{self.icons['warning']} Failed to copy "
-                        f"{lang.upper()} summary to docs/: {e}[/yellow]\n"
-                    )
-
-                # Send email if configured
-                if self.email_manager and self.config.email and self.config.email.enabled:
-                    self.console.print(
-                        f"{self.icons['email']} Sending {lang.upper()} email summary..."
-                    )
-                    subscribers = self.storage.load_subscribers()
-                    subject = f"Horizon Summary ({lang.upper()}) - {today}"
-                    self.email_manager.send_daily_summary(summary, subject, subscribers)
-
-                # Send webhook notification if configured
-                if self.webhook_notifier:
-                    await self.webhook_notifier.send_daily_summary(
-                        summary=summary,
-                        important_items=important_items,
-                        all_items_count=len(all_items),
-                        date=today,
-                        lang=lang,
-                        summarizer=summarizer,
-                    )
+            # 7. Save locally, publish Pages, then send notifications
+            await self._deliver_daily(important_items, len(all_items), today)
 
             self.console.print(
                 f"[bold green]{self.icons['success']} "
@@ -381,6 +332,73 @@ class HorizonOrchestrator:
                 )
 
             raise
+
+        finally:
+            if (
+                getattr(self, "_owns_page_publisher", False)
+                and getattr(self, "page_publisher", None) is not None
+            ):
+                await self.page_publisher.aclose()
+
+    async def _deliver_daily(
+        self,
+        important_items: List[ContentItem],
+        total_fetched: int,
+        date: str,
+    ) -> None:
+        summaries: Dict[str, str] = {}
+        profile_names = getattr(getattr(self, "profiles", None), "names", {})
+        languages = list(
+            getattr(getattr(self.config, "ai", None), "languages", [])
+        )
+        summarizer = DailySummarizer(profile_names=profile_names)
+        for lang in languages:
+            summary = await summarizer.generate_summary(
+                important_items,
+                date,
+                total_fetched,
+                language=lang,
+            )
+            summaries[lang] = summary
+            self.storage.save_daily_summary(date, summary, language=lang)
+
+        page_urls: Dict[str, str] = {}
+        if getattr(self, "page_publisher", None):
+            bundle = build_daily_page_bundle(
+                important_items,
+                date,
+                total_fetched,
+                languages,
+                summarizer,
+                self.config.github_pages.site_url,
+            )
+            publication = await self.page_publisher.publish(bundle)
+            if publication.success:
+                page_urls.update(publication.urls)
+            else:
+                self.console.print(
+                    f"[yellow]完整日报暂未发布: {publication.error_type}[/yellow]"
+                )
+
+        for lang, summary in summaries.items():
+            if (
+                self.email_manager
+                and self.config.email
+                and self.config.email.enabled
+            ):
+                subscribers = self.storage.load_subscribers()
+                subject = f"Horizon Summary ({lang.upper()}) - {date}"
+                self.email_manager.send_daily_summary(summary, subject, subscribers)
+            if self.webhook_notifier:
+                await self.webhook_notifier.send_daily_summary(
+                    summary=summary,
+                    important_items=important_items,
+                    all_items_count=total_fetched,
+                    date=date,
+                    lang=lang,
+                    summarizer=summarizer,
+                    page_url=page_urls.get(lang),
+                )
 
     def _determine_time_window(self, force_hours: int = None) -> datetime:
         if force_hours:
