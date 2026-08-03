@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
 import time
+from typing import Literal
 
 import httpx
 
@@ -16,6 +17,7 @@ class PushPlusProtocolError(RuntimeError):
 
 
 class PushPlusDeliveryState(str, Enum):
+    ACCEPTED = "accepted"
     INACTIVE = "inactive"
     PENDING = "pending"
     SENDING = "sending"
@@ -47,8 +49,9 @@ class PushPlusClawBotClient:
         self,
         endpoint: str,
         user_token: str,
-        secret_key: str,
+        secret_key: str | None,
         *,
+        confirmation: Literal["accepted", "delivered"] = "delivered",
         status_timeout_seconds: int = 90,
         poll_interval_seconds: float = 2.0,
         request: RequestCallable = safe_request,
@@ -56,11 +59,14 @@ class PushPlusClawBotClient:
         monotonic: Callable[[], float] = time.monotonic,
         client: httpx.AsyncClient | None = None,
     ):
-        if not user_token or not secret_key:
-            raise ValueError("PushPlus user token and secretKey are required")
+        if not user_token:
+            raise ValueError("PushPlus user token is required")
+        if confirmation == "delivered" and not secret_key:
+            raise ValueError("PushPlus secretKey is required for delivered confirmation")
         self._endpoint = validate_http_url(endpoint)
         self._user_token = user_token
-        self._secret_key = secret_key
+        self._confirmation = confirmation
+        self._secret_key = secret_key or ""
         self._status_timeout_seconds = status_timeout_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._request = request
@@ -155,6 +161,25 @@ class PushPlusClawBotClient:
             raise PushPlusProtocolError("Delivery status response is invalid")
         return int(data["status"]), str(data.get("errorMessage") or "")
 
+    async def _send_message(self, title: str, content: str) -> str:
+        response = await self._request(
+            self._client,
+            "POST",
+            self._endpoint,
+            json={
+                "token": self._user_token,
+                "channel": "clawbot",
+                "title": title,
+                "content": content,
+                "template": "txt",
+            },
+        )
+        payload = self._payload(response)
+        receipt = payload.get("data")
+        if not isinstance(receipt, str) or not receipt.strip():
+            raise PushPlusProtocolError("PushPlus response has no message receipt")
+        return receipt.strip()
+
     async def send_and_wait(
         self,
         title: str,
@@ -162,28 +187,17 @@ class PushPlusClawBotClient:
     ) -> PushPlusDeliveryReport:
         short_code: str | None = None
         try:
-            if not await self.check_binding():
+            if self._confirmation == "delivered" and not await self.check_binding():
                 return PushPlusDeliveryReport(
                     PushPlusDeliveryState.INACTIVE,
                     detail="ClawBot has no active conversation token",
                 )
-            response = await self._request(
-                self._client,
-                "POST",
-                self._endpoint,
-                json={
-                    "token": self._user_token,
-                    "channel": "clawbot",
-                    "title": title,
-                    "content": content,
-                    "template": "txt",
-                },
-            )
-            payload = self._payload(response)
-            receipt = payload.get("data")
-            if not isinstance(receipt, str) or not receipt.strip():
-                raise PushPlusProtocolError("PushPlus response has no message receipt")
-            short_code = receipt.strip()
+            short_code = await self._send_message(title, content)
+            if self._confirmation == "accepted":
+                return PushPlusDeliveryReport(
+                    PushPlusDeliveryState.ACCEPTED,
+                    short_code=short_code,
+                )
             deadline = self._monotonic() + self._status_timeout_seconds
             while True:
                 status, error_message = await self._delivery_status(short_code)

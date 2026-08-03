@@ -251,3 +251,56 @@ def test_expiring_access_key_is_refreshed_and_secrets_stay_out_of_repr():
     assert len(access_calls) == 2
     assert "user-token" not in repr(client)
     assert "secret-key" not in repr(client)
+
+
+def test_accepted_mode_posts_once_without_open_api_calls():
+    request = ScriptedRequest(
+        [httpx.Response(200, json={"code": 200, "msg": "ok", "data": "receipt-1"})]
+    )
+    client = PushPlusClawBotClient(
+        endpoint="https://www.pushplus.plus/send",
+        user_token="user-token",
+        secret_key=None,
+        confirmation="accepted",
+        request=request,
+        client=object(),
+    )
+
+    result = asyncio.run(client.send_and_wait("title", "body"))
+
+    assert result.state == PushPlusDeliveryState.ACCEPTED
+    assert result.short_code == "receipt-1"
+    assert len(request.calls) == 1
+    assert request.calls[0][1].endswith("/send")
+    assert request.calls[0][2]["json"]["channel"] == "clawbot"
+    assert request.calls[0][2]["json"]["template"] == "txt"
+
+
+def test_delivered_mode_still_rejects_missing_secret_key():
+    with pytest.raises(ValueError, match="secretKey"):
+        PushPlusClawBotClient(
+            endpoint="https://www.pushplus.plus/send",
+            user_token="user-token",
+            secret_key=None,
+            confirmation="delivered",
+        )
+
+
+def test_accepted_mode_redacts_send_business_failure():
+    request = ScriptedRequest(
+        [httpx.Response(200, json={"code": 500, "msg": "rejected user-token"})]
+    )
+    client = PushPlusClawBotClient(
+        endpoint="https://www.pushplus.plus/send",
+        user_token="user-token",
+        secret_key=None,
+        confirmation="accepted",
+        request=request,
+        client=object(),
+    )
+
+    result = asyncio.run(client.send_and_wait("title", "body"))
+
+    assert result.state == PushPlusDeliveryState.API_FAILURE
+    assert "user-token" not in (result.detail or "")
+    assert "<redacted>" in (result.detail or "")
