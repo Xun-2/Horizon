@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from rich.console import Console
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -18,6 +19,7 @@ from ..models import ContentItem, WebhookConfig
 from ..ai.summarizer import DailySummarizer
 from .pushplus import (
     PushPlusClawBotClient,
+    PushPlusDeliveryReport,
     PushPlusDeliveryState,
 )
 from ..url_security import UnsafeURLError, safe_request, validate_http_url
@@ -57,6 +59,7 @@ class WebhookDeliveryResult:
 
 
 PUSHPLUS_STATUS_MAP = {
+    PushPlusDeliveryState.ACCEPTED: WebhookDeliveryStatus.SUCCESS,
     PushPlusDeliveryState.DELIVERED: WebhookDeliveryStatus.SUCCESS,
     PushPlusDeliveryState.INACTIVE: WebhookDeliveryStatus.CHANNEL_INACTIVE,
     PushPlusDeliveryState.FAILED: WebhookDeliveryStatus.DELIVERY_FAILED,
@@ -332,27 +335,31 @@ class WebhookNotifier:
             and config.pushplus is not None
             and self.url is not None
         ):
-            token = os.getenv(config.pushplus.token_env)
-            secret_key = os.getenv(config.pushplus.secret_key_env)
+            pushplus = config.pushplus
+            token = os.getenv(pushplus.token_env)
+            secret_key = (
+                os.getenv(pushplus.secret_key_env)
+                if pushplus.secret_key_env is not None
+                else None
+            )
             if not token:
                 raise ValueError(
-                    f"Missing environment variable: {config.pushplus.token_env}"
+                    f"Missing environment variable: {pushplus.token_env}"
                 )
-            if not secret_key:
+            if pushplus.confirmation == "delivered" and not secret_key:
                 raise ValueError(
-                    f"Missing environment variable: {config.pushplus.secret_key_env}"
+                    f"Missing environment variable: {pushplus.secret_key_env}"
                 )
-            self._configured_secrets.update({token, secret_key})
+            self._configured_secrets.update(
+                value for value in (token, secret_key) if value
+            )
             self._pushplus_client_factory = lambda: PushPlusClawBotClient(
                 endpoint=self.url or "",
                 user_token=token,
                 secret_key=secret_key,
-                status_timeout_seconds=(
-                    config.pushplus.status_timeout_seconds
-                ),
-                poll_interval_seconds=(
-                    config.pushplus.poll_interval_seconds
-                ),
+                confirmation=pushplus.confirmation,
+                status_timeout_seconds=pushplus.status_timeout_seconds,
+                poll_interval_seconds=pushplus.poll_interval_seconds,
             )
 
     def _redact_configured_secrets(self, value: str) -> str:
@@ -1016,15 +1023,7 @@ class WebhookNotifier:
                     report = await delivery_client.send_and_wait(
                         message["message_title"], message["summary"]
                     )
-                    status = PUSHPLUS_STATUS_MAP.get(
-                        report.state, WebhookDeliveryStatus.PLATFORM_FAILURE
-                    )
-                    detail = self._redact_configured_secrets(report.detail or "")
-                    result = WebhookDeliveryResult(
-                        status=status,
-                        detail=detail or None,
-                        error_type=report.state.value,
-                    )
+                    result = self._webhook_result_from_pushplus(report)
                     results.append(result)
                     if result.sent:
                         self.console.print("[green]ClawBot 已送达[/green]")
@@ -1038,6 +1037,66 @@ class WebhookNotifier:
                     await delivery_client.aclose()
 
         return [await self.notify(message) for message in messages]
+
+    async def send_bilingual_daily_summary(
+        self,
+        important_items: List[ContentItem],
+        date: str,
+        summarizer: DailySummarizer,
+        page_urls: Mapping[str, str],
+    ) -> WebhookDeliveryResult:
+        if not self.config.enabled:
+            return WebhookDeliveryResult(WebhookDeliveryStatus.DISABLED)
+        if self.config.platform != "pushplus" or self.config.pushplus is None:
+            return WebhookDeliveryResult(
+                WebhookDeliveryStatus.SKIPPED,
+                detail="Bilingual links delivery requires PushPlus ClawBot",
+            )
+        content = summarizer.generate_clawbot_bilingual_digest(
+            important_items,
+            date,
+            page_urls,
+        )
+        report = await self._send_one_pushplus(
+            f"Horizon {date} AI 日报",
+            content,
+        )
+        return self._webhook_result_from_pushplus(report)
+
+    def _webhook_result_from_pushplus(
+        self,
+        report: PushPlusDeliveryReport,
+    ) -> WebhookDeliveryResult:
+        detail = self._redact_configured_secrets(report.detail or "")
+        return WebhookDeliveryResult(
+            status=PUSHPLUS_STATUS_MAP.get(
+                report.state,
+                WebhookDeliveryStatus.PLATFORM_FAILURE,
+            ),
+            detail=detail or None,
+            error_type=report.state.value,
+        )
+
+    async def _send_one_pushplus(
+        self,
+        title: str,
+        content: str,
+    ) -> PushPlusDeliveryReport:
+        delivery_client = self.pushplus_client
+        owns_delivery_client = False
+        if delivery_client is None and self._pushplus_client_factory is not None:
+            delivery_client = self._pushplus_client_factory()
+            owns_delivery_client = True
+        if delivery_client is None:
+            return PushPlusDeliveryReport(
+                state=PushPlusDeliveryState.API_FAILURE,
+                detail="PushPlus ClawBot client is not configured",
+            )
+        try:
+            return await delivery_client.send_and_wait(title, content)
+        finally:
+            if owns_delivery_client:
+                await delivery_client.aclose()
 
     async def send_failure(
         self,

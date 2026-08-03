@@ -2,6 +2,7 @@
 
 import html
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from urllib.parse import quote, urlsplit
@@ -22,6 +23,24 @@ _COMMON_ABBREVIATION = re.compile(
     r"\b(?:(?:[A-Za-z]\.){2,}|(?:Inc|Ltd|Corp|Co)\.)",
     re.IGNORECASE,
 )
+
+
+def _validated_page_url(value: str, label: str) -> str:
+    raw_url = value.strip()
+    try:
+        parsed = urlsplit(raw_url)
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an absolute HTTP(S) URL") from exc
+    if (
+        any(ord(char) < 32 or ord(char) == 127 for char in raw_url)
+        or parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(f"{label} must be an absolute HTTP(S) URL")
+    return raw_url
 
 
 def _escape_markdown(value: object) -> str:
@@ -432,23 +451,9 @@ class DailySummarizer:
         page_url: str | None,
     ) -> str:
         """Render one deterministic plain-text digest for ClawBot."""
-        safe_page_url = None
-        if page_url:
-            raw_url = page_url.strip()
-            try:
-                parsed = urlsplit(raw_url)
-                parsed.port
-            except ValueError as exc:
-                raise ValueError("page_url must be an absolute HTTP(S) URL") from exc
-            if (
-                any(ord(char) < 32 or ord(char) == 127 for char in raw_url)
-                or parsed.scheme.lower() not in {"http", "https"}
-                or not parsed.hostname
-                or parsed.username is not None
-                or parsed.password is not None
-            ):
-                raise ValueError("page_url must be an absolute HTTP(S) URL")
-            safe_page_url = raw_url
+        safe_page_url = (
+            _validated_page_url(page_url, "page_url") if page_url else None
+        )
 
         selected = items[:3]
         if language == "zh":
@@ -480,6 +485,27 @@ class DailySummarizer:
         lines.append(
             f"{link_label}: {safe_page_url}" if safe_page_url else unavailable
         )
+        return "\n".join(lines)
+
+    def generate_clawbot_bilingual_digest(
+        self,
+        items: List[ContentItem],
+        date: str,
+        page_urls: Mapping[str, str],
+    ) -> str:
+        if not {"zh", "en"}.issubset(page_urls):
+            raise ValueError("ClawBot bilingual digest requires zh and en page URLs")
+        zh_url = _validated_page_url(page_urls["zh"], "zh page URL")
+        en_url = _validated_page_url(page_urls["en"], "en page URL")
+        lines = [f"早上好，这是 {date} 的 AI 日报速览。"]
+        for index, item in enumerate(items[:3], start=1):
+            title, sentences = self._friend_content(item, "zh")
+            title = re.sub(r"\s+", " ", title).strip()
+            conclusion = re.sub(r"\s+", " ", sentences[0]).strip() if sentences else ""
+            lines.append(f"{index}. {title}" + (f" - {conclusion}" if conclusion else ""))
+        if not items:
+            lines.append("今天暂无达到筛选阈值的动态。")
+        lines.extend(["", f"中文完整日报: {zh_url}", f"English report: {en_url}"])
         return "\n".join(lines)
 
     def generate_webhook_overview(

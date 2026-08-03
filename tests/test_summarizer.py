@@ -250,6 +250,37 @@ def test_clawbot_digest_rejects_non_http_page_url():
         )
 
 
+def test_bilingual_clawbot_digest_is_one_plain_text_message_with_two_links():
+    summarizer = DailySummarizer()
+    items = [_make_friend_item(index) for index in range(1, 6)]
+
+    text = summarizer.generate_clawbot_bilingual_digest(
+        items,
+        "2026-08-03",
+        {
+            "zh": "https://xun-2.github.io/Horizon/daily/2026-08-03/zh.html",
+            "en": "https://xun-2.github.io/Horizon/daily/2026-08-03/en.html",
+        },
+    )
+
+    assert "早上好" in text
+    assert text.count("https://") == 2
+    assert "中文完整日报" in text
+    assert "English report" in text
+    assert "<" not in text
+    assert "[" not in text
+    assert sum(line.startswith(("1.", "2.", "3.")) for line in text.splitlines()) == 3
+
+
+def test_bilingual_clawbot_digest_requires_both_public_links():
+    with pytest.raises(ValueError, match="zh and en"):
+        DailySummarizer().generate_clawbot_bilingual_digest(
+            [],
+            "2026-08-03",
+            {"zh": "https://xun-2.github.io/Horizon/daily/2026-08-03/zh.html"},
+        )
+
+
 def test_generate_friend_digest_escapes_text_and_omits_unsafe_url():
     item = _make_friend_item(1)
     item.processing.artifacts["en"].title = "Model [update]"

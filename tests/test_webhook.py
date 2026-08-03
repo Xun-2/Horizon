@@ -16,9 +16,11 @@ from src.models import (
     ContentArtifact,
     ContentItem,
     ProcessingResult,
+    PushPlusClawBotConfig,
     SourceType,
     WebhookConfig,
 )
+from src.services.pushplus import PushPlusDeliveryReport, PushPlusDeliveryState
 from src.services.webhook import (
     WebhookNotifier,
     WebhookDeliveryStatus,
@@ -845,6 +847,51 @@ def _make_item(title="Test Item", url="https://example.com/test", score=8.0):
             },
         ),
     )
+
+
+def test_bilingual_clawbot_summary_sends_one_accepted_message(monkeypatch):
+    class FakePushPlusClient:
+        def __init__(self):
+            self.calls = []
+
+        async def send_and_wait(self, title, content):
+            self.calls.append((title, content))
+            return PushPlusDeliveryReport(
+                state=PushPlusDeliveryState.ACCEPTED,
+                short_code="receipt-1",
+            )
+
+    monkeypatch.setenv(_TEST_URL_ENV, _TEST_URL)
+    client = FakePushPlusClient()
+    config = WebhookConfig(
+        enabled=True,
+        url_env=_TEST_URL_ENV,
+        delivery="overview",
+        platform="pushplus",
+        languages=["zh", "en"],
+        pushplus=PushPlusClawBotConfig(
+            confirmation="accepted",
+            secret_key_env=None,
+        ),
+    )
+    notifier = WebhookNotifier(config, pushplus_client=client)
+
+    result = _run_async(
+        notifier.send_bilingual_daily_summary(
+            important_items=[_make_item()],
+            date="2026-08-03",
+            summarizer=DailySummarizer(),
+            page_urls={
+                "zh": "https://xun-2.github.io/Horizon/daily/2026-08-03/zh.html",
+                "en": "https://xun-2.github.io/Horizon/daily/2026-08-03/en.html",
+            },
+        )
+    )
+
+    assert result.status == WebhookDeliveryStatus.SUCCESS
+    assert len(client.calls) == 1
+    assert client.calls[0][0] == "Horizon 2026-08-03 AI 日报"
+    assert client.calls[0][1].count("https://") == 2
 
 
 # ── send_daily_summary ──
