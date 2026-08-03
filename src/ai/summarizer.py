@@ -500,8 +500,12 @@ class DailySummarizer:
         lines = [f"早上好，这是 {date} 的 AI 日报速览。"]
         for index, item in enumerate(items[:3], start=1):
             title, sentences = self._friend_content(item, "zh")
-            title = re.sub(r"\s+", " ", title).strip()
-            conclusion = re.sub(r"\s+", " ", sentences[0]).strip() if sentences else ""
+            title = re.sub(r"[<\[]", "", re.sub(r"\s+", " ", title)).strip()
+            conclusion = (
+                re.sub(r"[<\[]", "", re.sub(r"\s+", " ", sentences[0])).strip()
+                if sentences
+                else ""
+            )
             lines.append(f"{index}. {title}" + (f" - {conclusion}" if conclusion else ""))
         if not items:
             lines.append("今天暂无达到筛选阈值的动态。")

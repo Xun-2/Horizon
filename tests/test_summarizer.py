@@ -281,6 +281,28 @@ def test_bilingual_clawbot_digest_requires_both_public_links():
         )
 
 
+def test_bilingual_clawbot_digest_removes_plain_text_markers_from_item_content():
+    item = _make_friend_item(1)
+    item.processing.artifacts["zh"].title = "Unsafe <title [one]"
+    item.processing.artifacts["zh"].blocks[0].content = (
+        "Conclusion <two [three]."
+    )
+
+    text = DailySummarizer().generate_clawbot_bilingual_digest(
+        [item],
+        "2026-08-03",
+        {
+            "zh": "https://xun-2.github.io/Horizon/daily/2026-08-03/zh.html",
+            "en": "https://xun-2.github.io/Horizon/daily/2026-08-03/en.html",
+        },
+    )
+
+    assert "<" not in text
+    assert "[" not in text
+    assert "Unsafe title one]" in text
+    assert "Conclusion two three]." in text
+
+
 def test_generate_friend_digest_escapes_text_and_omits_unsafe_url():
     item = _make_friend_item(1)
     item.processing.artifacts["en"].title = "Model [update]"
