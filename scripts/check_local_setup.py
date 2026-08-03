@@ -242,10 +242,16 @@ def _build_clawbot_client(config: Config) -> PushPlusClawBotClient:
     if config.webhook is None or config.webhook.pushplus is None:
         raise ValueError("PushPlus ClawBot is not configured")
     pushplus = config.webhook.pushplus
+    secret_key = (
+        os.environ.get(pushplus.secret_key_env, "")
+        if pushplus.secret_key_env
+        else None
+    )
     return PushPlusClawBotClient(
         os.environ.get(config.webhook.url_env or "", ""),
         os.environ.get(pushplus.token_env, ""),
-        os.environ.get(pushplus.secret_key_env, ""),
+        secret_key,
+        confirmation=pushplus.confirmation,
         status_timeout_seconds=pushplus.status_timeout_seconds,
         poll_interval_seconds=pushplus.poll_interval_seconds,
     )

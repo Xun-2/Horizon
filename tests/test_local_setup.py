@@ -81,6 +81,35 @@ def test_local_example_passes_explicit_offline_check():
     assert "test-pushplus-secret" not in result.stdout + result.stderr
 
 
+def test_accepted_confirmation_does_not_require_pushplus_secret_key():
+    raw = {
+        "ai": {
+            "provider": "openai",
+            "api_key_env": "AOLIGEI_API_KEY",
+        },
+        "webhook": {
+            "enabled": True,
+            "url_env": "HORIZON_WEBHOOK_URL",
+            "pushplus": {
+                "confirmation": "accepted",
+                "token_env": "PUSHPLUS_TOKEN",
+                "secret_key_env": None,
+            },
+        },
+        "github_pages": {
+            "enabled": True,
+            "token_env": "HORIZON_GITHUB_TOKEN",
+        },
+    }
+
+    assert check_local_setup._required_environment(raw) == {
+        "AOLIGEI_API_KEY",
+        "PUSHPLUS_TOKEN",
+        "HORIZON_GITHUB_TOKEN",
+        "HORIZON_WEBHOOK_URL",
+    }
+
+
 def test_default_check_is_offline():
     result = _run()
 

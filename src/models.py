@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import re
 from typing import Annotated, Literal, Optional, List, Dict, Any, NamedTuple, Union
-from pydantic import BaseModel, ConfigDict, HttpUrl, Field, field_validator
+from pydantic import BaseModel, ConfigDict, HttpUrl, Field, field_validator, model_validator
 
 
 class SourceType(str, Enum):
@@ -456,17 +456,32 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 class PushPlusClawBotConfig(BaseModel):
     channel: Literal["clawbot"] = "clawbot"
     template: Literal["txt"] = "txt"
+    confirmation: Literal["accepted", "delivered"] = "delivered"
+    message_mode: Literal["bilingual_links"] = "bilingual_links"
     token_env: str = "PUSHPLUS_TOKEN"
-    secret_key_env: str = "PUSHPLUS_SECRET_KEY"
+    secret_key_env: str | None = "PUSHPLUS_SECRET_KEY"
     status_timeout_seconds: int = Field(default=90, ge=10, le=300)
     poll_interval_seconds: float = Field(default=2.0, gt=0, le=10)
 
-    @field_validator("token_env", "secret_key_env")
+    @field_validator("token_env")
     @classmethod
-    def validate_environment_name(cls, value: str) -> str:
+    def validate_token_environment_name(cls, value: str) -> str:
         if not _ENV_NAME.fullmatch(value):
             raise ValueError("environment variable name is invalid")
         return value
+
+    @field_validator("secret_key_env")
+    @classmethod
+    def validate_secret_environment_name(cls, value: str | None) -> str | None:
+        if value is not None and not _ENV_NAME.fullmatch(value):
+            raise ValueError("environment variable name is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def require_secret_for_delivered_confirmation(self):
+        if self.confirmation == "delivered" and not self.secret_key_env:
+            raise ValueError("secret_key_env is required for delivered confirmation")
+        return self
 
 
 class GitHubPagesConfig(BaseModel):

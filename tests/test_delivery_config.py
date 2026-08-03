@@ -24,6 +24,31 @@ def test_clawbot_contract_has_fixed_channel_template_and_env_names():
     assert config.poll_interval_seconds == 2.0
 
 
+def test_clawbot_defaults_to_verified_bilingual_delivery():
+    config = PushPlusClawBotConfig()
+
+    assert config.confirmation == "delivered"
+    assert config.message_mode == "bilingual_links"
+    assert config.secret_key_env == "PUSHPLUS_SECRET_KEY"
+
+
+def test_accepted_clawbot_mode_does_not_require_secret_environment_name():
+    config = PushPlusClawBotConfig(
+        confirmation="accepted",
+        secret_key_env=None,
+    )
+
+    assert config.secret_key_env is None
+
+
+def test_delivered_clawbot_mode_requires_secret_environment_name():
+    with pytest.raises(ValidationError, match="secret_key_env"):
+        PushPlusClawBotConfig(
+            confirmation="delivered",
+            secret_key_env=None,
+        )
+
+
 @pytest.mark.parametrize("field", ["channel", "template"])
 def test_clawbot_contract_rejects_fallback_values(field):
     value = {"channel": "wechat", "template": "markdown"}[field]

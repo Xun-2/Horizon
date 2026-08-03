@@ -108,6 +108,8 @@
     "pushplus": {
       "channel": "clawbot",
       "template": "txt",
+      "confirmation": "delivered",
+      "message_mode": "bilingual_links",
       "token_env": "PUSHPLUS_TOKEN",
       "secret_key_env": "PUSHPLUS_SECRET_KEY",
       "status_timeout_seconds": 90,
