@@ -404,11 +404,12 @@ class HorizonOrchestrator:
                     f"[yellow]完整日报暂未发布: {publication.error_type}[/yellow]"
                 )
 
+        webhook = getattr(self.config, "webhook", None)
         pushplus = (
-            self.config.webhook.pushplus
+            webhook.pushplus
             if self.webhook_notifier
-            and self.config.webhook is not None
-            and self.config.webhook.platform == "pushplus"
+            and webhook is not None
+            and webhook.platform == "pushplus"
             else None
         )
         use_bilingual_links = (
