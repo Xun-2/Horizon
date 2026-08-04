@@ -1,6 +1,7 @@
 """Main orchestrator coordinating the entire workflow."""
 
 import asyncio
+from collections.abc import Sequence
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -16,8 +17,8 @@ from .models import Config, ContentItem
 from .storage.manager import StorageManager
 from .services.email import EmailManager
 from .services.daily_pages import build_daily_page_bundle
-from .services.github_pages import GitHubPagesPublisher
-from .services.webhook import WebhookNotifier
+from .services.github_pages import GitHubPagesPublisher, PagePublishResult
+from .services.webhook import WebhookDeliveryResult, WebhookNotifier
 from .scrapers.github import GitHubScraper
 from .scrapers.hackernews import HackerNewsScraper
 from .scrapers.rss import RSSScraper
@@ -168,6 +169,18 @@ class FetchReport:
         }
 
 
+@dataclass(frozen=True)
+class DailyDeliveryResult:
+    success: bool
+    page_urls: dict[str, str]
+    notification_results: Sequence[WebhookDeliveryResult] = ()
+    error_type: str | None = None
+
+
+class DailyDeliveryError(RuntimeError):
+    pass
+
+
 class HorizonOrchestrator:
     """Orchestrates the complete workflow for content aggregation and analysis."""
 
@@ -257,7 +270,11 @@ class HorizonOrchestrator:
                 raise RuntimeError(self.last_fetch_report.failure_message())
 
             if not all_items:
-                await self._deliver_daily([], 0, today)
+                delivery = await self._deliver_daily([], 0, today)
+                if not delivery.success:
+                    raise DailyDeliveryError(
+                        delivery.error_type or "daily_delivery_failed"
+                    )
                 self.console.print(
                     f"[bold green]{self.icons['success']} "
                     "Horizon completed successfully![/bold green]"
@@ -298,7 +315,13 @@ class HorizonOrchestrator:
             await self.enrich_items(important_items)
 
             # 7. Save locally, publish Pages, then send notifications
-            await self._deliver_daily(important_items, len(all_items), today)
+            delivery = await self._deliver_daily(
+                important_items, len(all_items), today
+            )
+            if not delivery.success:
+                raise DailyDeliveryError(
+                    delivery.error_type or "daily_delivery_failed"
+                )
 
             self.console.print(
                 f"[bold green]{self.icons['success']} "
@@ -319,16 +342,16 @@ class HorizonOrchestrator:
                         f"(in: {u.input_tokens}, out: {u.output_tokens})"
                     )
 
-        except Exception as e:
+        except Exception as error:
             self.console.print(
-                f"[bold red]{self.icons['error']} Error: {e}[/bold red]"
+                f"[bold red]{self.icons['error']} Error: {error}[/bold red]"
             )
 
             # Send webhook failure notification if configured
-            if self.webhook_notifier:
+            if self.webhook_notifier and not isinstance(error, DailyDeliveryError):
                 await self.webhook_notifier.send_failure(
                     date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    error_message=str(e),
+                    error_message=str(error),
                 )
 
             raise
@@ -345,7 +368,7 @@ class HorizonOrchestrator:
         important_items: List[ContentItem],
         total_fetched: int,
         date: str,
-    ) -> None:
+    ) -> DailyDeliveryResult:
         summaries: Dict[str, str] = {}
         profile_names = getattr(getattr(self, "profiles", None), "names", {})
         languages = list(
@@ -363,6 +386,7 @@ class HorizonOrchestrator:
             self.storage.save_daily_summary(date, summary, language=lang)
 
         page_urls: Dict[str, str] = {}
+        publication: PagePublishResult | None = None
         if getattr(self, "page_publisher", None):
             bundle = build_daily_page_bundle(
                 important_items,
@@ -380,6 +404,47 @@ class HorizonOrchestrator:
                     f"[yellow]完整日报暂未发布: {publication.error_type}[/yellow]"
                 )
 
+        pushplus = (
+            self.config.webhook.pushplus
+            if self.webhook_notifier
+            and self.config.webhook is not None
+            and self.config.webhook.platform == "pushplus"
+            else None
+        )
+        use_bilingual_links = (
+            pushplus is not None and pushplus.message_mode == "bilingual_links"
+        )
+        if use_bilingual_links:
+            if (
+                publication is None
+                or not publication.success
+                or not set(languages).issubset(page_urls)
+            ):
+                return DailyDeliveryResult(
+                    success=False,
+                    page_urls=page_urls,
+                    error_type=(
+                        publication.error_type
+                        if publication is not None and publication.error_type
+                        else "pages_incomplete"
+                    ),
+                )
+            notification = (
+                await self.webhook_notifier.send_bilingual_daily_summary(
+                    important_items=important_items,
+                    date=date,
+                    summarizer=summarizer,
+                    page_urls=page_urls,
+                )
+            )
+            return DailyDeliveryResult(
+                success=notification.sent,
+                page_urls=page_urls,
+                notification_results=(notification,),
+                error_type=None if notification.sent else "pushplus_failure",
+            )
+
+        legacy_results: list[WebhookDeliveryResult] = []
         for lang, summary in summaries.items():
             if (
                 self.email_manager
@@ -390,15 +455,22 @@ class HorizonOrchestrator:
                 subject = f"Horizon Summary ({lang.upper()}) - {date}"
                 self.email_manager.send_daily_summary(summary, subject, subscribers)
             if self.webhook_notifier:
-                await self.webhook_notifier.send_daily_summary(
-                    summary=summary,
-                    important_items=important_items,
-                    all_items_count=total_fetched,
-                    date=date,
-                    lang=lang,
-                    summarizer=summarizer,
-                    page_url=page_urls.get(lang),
+                legacy_results.extend(
+                    await self.webhook_notifier.send_daily_summary(
+                        summary=summary,
+                        important_items=important_items,
+                        all_items_count=total_fetched,
+                        date=date,
+                        lang=lang,
+                        summarizer=summarizer,
+                        page_url=page_urls.get(lang),
+                    )
                 )
+        return DailyDeliveryResult(
+            success=True,
+            page_urls=page_urls,
+            notification_results=tuple(legacy_results),
+        )
 
     def _determine_time_window(self, force_hours: int = None) -> datetime:
         if force_hours:

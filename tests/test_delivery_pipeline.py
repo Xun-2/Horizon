@@ -4,8 +4,9 @@ import re
 from types import SimpleNamespace
 
 from src.models import GitHubPagesConfig
-from src.orchestrator import HorizonOrchestrator
+from src.orchestrator import DailyDeliveryResult, HorizonOrchestrator
 from src.services.github_pages import PagePublishResult
+from src.services.webhook import WebhookDeliveryResult, WebhookDeliveryStatus
 
 
 class FakeStorage:
@@ -31,25 +32,34 @@ class FakePublisher:
 
 
 class FakeNotifier:
-    def __init__(self, events):
+    def __init__(self, events, success):
         self.events = events
+        self.success = success
 
-    async def send_daily_summary(self, **kwargs):
-        self.events.append(f"notify:{kwargs['lang']}:{kwargs['page_url']}")
-        return []
+    async def send_bilingual_daily_summary(self, **kwargs):
+        self.events.append("notify:bilingual")
+        return WebhookDeliveryResult(
+            WebhookDeliveryStatus.SUCCESS
+            if self.success
+            else WebhookDeliveryStatus.PLATFORM_FAILURE
+        )
 
 
-def _orchestrator(events, publish_success):
+def _orchestrator(events, *, publish_success, notify_success):
     orchestrator = object.__new__(HorizonOrchestrator)
     orchestrator.config = SimpleNamespace(
         ai=SimpleNamespace(languages=["zh", "en"]),
         email=None,
         github_pages=GitHubPagesConfig(enabled=True),
+        webhook=SimpleNamespace(
+            platform="pushplus",
+            pushplus=SimpleNamespace(message_mode="bilingual_links"),
+        ),
     )
     orchestrator.storage = FakeStorage(events)
     orchestrator.profiles = SimpleNamespace(names={})
     orchestrator.page_publisher = FakePublisher(events, publish_success)
-    orchestrator.webhook_notifier = FakeNotifier(events)
+    orchestrator.webhook_notifier = FakeNotifier(events, notify_success)
     orchestrator.email_manager = None
     orchestrator.console = SimpleNamespace(
         print=lambda message: events.append("warning")
@@ -57,30 +67,40 @@ def _orchestrator(events, publish_success):
     return orchestrator
 
 
-def test_pipeline_publishes_both_languages_before_notifying():
+def test_bilingual_pipeline_publishes_both_languages_then_sends_once():
     events = []
-    orchestrator = _orchestrator(events, publish_success=True)
-
-    asyncio.run(orchestrator._deliver_daily([], 0, "2026-08-02"))
-
-    assert events.index("publish:zh,en") < events.index(
-        "notify:zh:https://xun-2.github.io/Horizon/daily/2026-08-02/zh.html"
-    )
-    assert events.index("publish:zh,en") < events.index(
-        "notify:en:https://xun-2.github.io/Horizon/daily/2026-08-02/en.html"
+    orchestrator = _orchestrator(
+        events, publish_success=True, notify_success=True
     )
 
+    result = asyncio.run(orchestrator._deliver_daily([], 0, "2026-08-03"))
 
-def test_pages_failure_still_notifies_without_link():
+    assert result.success is True
+    assert events == ["save:zh", "save:en", "publish:zh,en", "notify:bilingual"]
+
+
+def test_pages_failure_skips_clawbot_and_is_not_success():
     events = []
-    orchestrator = _orchestrator(events, publish_success=False)
+    orchestrator = _orchestrator(
+        events, publish_success=False, notify_success=True
+    )
 
-    asyncio.run(orchestrator._deliver_daily([], 0, "2026-08-02"))
+    result = asyncio.run(orchestrator._deliver_daily([], 0, "2026-08-03"))
 
-    assert "notify:zh:None" in events
-    assert "notify:en:None" in events
-    assert events.count("save:zh") == 1
-    assert events.count("save:en") == 1
+    assert result.success is False
+    assert result.error_type == "github_failure"
+    assert "notify:bilingual" not in events
+
+
+def test_pushplus_failure_is_not_daily_success():
+    result = asyncio.run(
+        _orchestrator(
+            [], publish_success=True, notify_success=False
+        )._deliver_daily([], 0, "2026-08-03")
+    )
+
+    assert result.success is False
+    assert result.error_type == "pushplus_failure"
 
 
 def test_no_fetched_items_still_runs_empty_delivery():
@@ -105,6 +125,7 @@ def test_no_fetched_items_still_runs_empty_delivery():
 
     async def deliver_daily(items, total_fetched, date):
         events.append((items, total_fetched, date))
+        return DailyDeliveryResult(success=True, page_urls={})
 
     orchestrator.fetch_all_sources = fetch_all_sources
     orchestrator._deliver_daily = deliver_daily
