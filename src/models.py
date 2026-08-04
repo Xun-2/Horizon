@@ -660,6 +660,28 @@ class DigestConfig(BaseModel):
     default_group_limit: Optional[int] = Field(default=None, gt=0)
 
 
+class FilteringConfig(BaseModel):
+    """Local radar topic and score constraints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    focus_topics: List[str] = Field(default_factory=list, min_length=1, max_length=10)
+    ai_score_threshold: float = Field(default=6.5, ge=0, le=10)
+
+    @field_validator("focus_topics")
+    @classmethod
+    def validate_focus_topics(cls, topics: List[str]) -> List[str]:
+        cleaned = [topic.strip() for topic in topics]
+        if any(not topic or len(topic) > 80 for topic in cleaned):
+            raise ValueError("focus topics must contain 1-80 characters")
+        if any(
+            any(ord(char) < 32 or ord(char) == 127 for char in topic)
+            for topic in cleaned
+        ):
+            raise ValueError("focus topics must not contain control characters")
+        return cleaned
+
+
 class Config(BaseModel):
     """Main configuration model."""
 
@@ -669,6 +691,9 @@ class Config(BaseModel):
     sources: SourcesConfig
     collection: CollectionConfig = Field(default_factory=CollectionConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)
+    filtering: FilteringConfig = Field(
+        default_factory=lambda: FilteringConfig(focus_topics=["technology"])
+    )
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     extractors: Dict[str, ExtractorConfig] = Field(default_factory=dict)

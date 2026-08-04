@@ -53,7 +53,9 @@ def test_loads_builtin_tech_blog_profile():
 
 def test_example_config_includes_enabled_nvidia_tech_blog_source():
     root = Path(__file__).resolve().parents[1]
-    config = json.loads((root / "data" / "config.example.json").read_text())
+    config = json.loads(
+        (root / "data" / "config.example.json").read_text(encoding="utf-8")
+    )
     source = next(
         source
         for source in config["sources"]["rss"]

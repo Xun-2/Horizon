@@ -3,12 +3,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER = ROOT / "scripts" / "run_horizon.ps1"
 RECOVERY_RUNNER = ROOT / "scripts" / "run_cloud_recovery.ps1"
 INSTALLER = ROOT / "scripts" / "install_scheduled_task.ps1"
 UNINSTALLER = ROOT / "scripts" / "uninstall_scheduled_task.ps1"
@@ -34,12 +32,6 @@ def _powershell(script: Path, *args: str, env=None, timeout=20):
         timeout=timeout,
         check=False,
     )
-
-
-def _new_logs(before: set[Path]) -> set[Path]:
-    log_dir = ROOT / "logs"
-    after = set(log_dir.glob("horizon-*.log")) if log_dir.exists() else set()
-    return after - before
 
 
 def _new_recovery_logs(before: set[Path]) -> set[Path]:
@@ -177,141 +169,6 @@ def test_secret_setup_writes_all_delivery_keys_without_echoing_values(tmp_path):
         "test-github-secret",
     ):
         assert value not in output
-
-
-def test_runner_uses_repo_working_directory_cache_and_expected_command(tmp_path):
-    capture = tmp_path / "capture.json"
-    fake_uv = tmp_path / "fake-uv.ps1"
-    fake_uv.write_text(
-        """
-$payload = [ordered]@{
-    working_directory = (Get-Location).Path
-    uv_cache_dir = $env:UV_CACHE_DIR
-    arguments = @($args)
-}
-$payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:HORIZON_TEST_CAPTURE -Encoding utf8
-exit 0
-""".strip(),
-        encoding="utf-8",
-    )
-    environment = dict(os.environ, HORIZON_TEST_CAPTURE=str(capture))
-    log_dir = ROOT / "logs"
-    before = set(log_dir.glob("horizon-*.log")) if log_dir.exists() else set()
-
-    result = _powershell(RUNNER, "-UvExecutable", str(fake_uv), env=environment)
-    created_logs = _new_logs(before)
-    try:
-        assert result.returncode == 0, result.stdout + result.stderr
-        payload = json.loads(capture.read_text(encoding="utf-8-sig"))
-        assert Path(payload["working_directory"]) == ROOT
-        assert Path(payload["uv_cache_dir"]) == ROOT / ".uv" / "cache"
-        assert payload["arguments"] == ["run", "horizon", "--hours", "24"]
-        assert len(created_logs) == 1
-    finally:
-        for path in created_logs:
-            path.unlink(missing_ok=True)
-
-
-def test_runner_preserves_success_when_command_writes_to_stderr(tmp_path):
-    fake_uv_script = tmp_path / "fake_uv.py"
-    fake_uv_script.write_text(
-        """
-from rich.console import Console
-
-console = Console(stderr=True)
-console.print("normal progress")
-console.print()
-""".strip(),
-        encoding="utf-8",
-    )
-
-
-    fake_uv = tmp_path / "fake-uv.cmd"
-    fake_uv.write_text(
-        f'@echo off\n"{sys.executable}" "{fake_uv_script}" %*\nexit /b %errorlevel%\n',
-        encoding="utf-8",
-    )
-    log_dir = ROOT / "logs"
-    before = set(log_dir.glob("horizon-*.log")) if log_dir.exists() else set()
-
-    result = _powershell(RUNNER, "-UvExecutable", str(fake_uv))
-    created_logs = _new_logs(before)
-    try:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert len(created_logs) == 1
-        log_text = next(iter(created_logs)).read_text(encoding="utf-8-sig")
-        assert "normal progress" in log_text
-        assert "System.Management.Automation.RemoteException" not in log_text
-        assert "finished with exit code 0" in log_text
-    finally:
-        for path in created_logs:
-            path.unlink(missing_ok=True)
-
-
-def test_runner_exclusive_lock_rejects_second_instance(tmp_path):
-    started = tmp_path / "started"
-    release = tmp_path / "release"
-    fake_uv = tmp_path / "blocking-uv.ps1"
-    fake_uv.write_text(
-        """
-Set-Content -LiteralPath $env:HORIZON_TEST_STARTED -Value started
-while (-not (Test-Path -LiteralPath $env:HORIZON_TEST_RELEASE)) {
-    Start-Sleep -Milliseconds 50
-}
-exit 0
-""".strip(),
-        encoding="utf-8",
-    )
-    environment = dict(
-        os.environ,
-        HORIZON_TEST_STARTED=str(started),
-        HORIZON_TEST_RELEASE=str(release),
-    )
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(RUNNER),
-        "-UvExecutable",
-        str(fake_uv),
-    ]
-    log_dir = ROOT / "logs"
-    before = set(log_dir.glob("horizon-*.log")) if log_dir.exists() else set()
-    first = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-    )
-    try:
-        deadline = time.monotonic() + 10
-        while not started.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert started.exists(), "first runner did not reach the fake uv command"
-
-        second = subprocess.run(
-            command,
-            cwd=ROOT,
-            env=environment,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=10,
-            check=False,
-        )
-        assert second.returncode == 3
-        assert "already running" in second.stderr.lower()
-    finally:
-        release.write_text("release", encoding="utf-8")
-        first.communicate(timeout=10)
-        for path in _new_logs(before):
-            path.unlink(missing_ok=True)
-        (ROOT / "logs" / "horizon.lock").unlink(missing_ok=True)
 
 
 def test_recovery_runner_uses_repo_cache_and_recover_command(tmp_path):

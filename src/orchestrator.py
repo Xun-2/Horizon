@@ -299,6 +299,7 @@ class HorizonOrchestrator:
             # 5. Filter, deduplicate, and balance the digest
             filtering_result = await self.select_digest_items(
                 analyzed_items,
+                threshold=self.config.filtering.ai_score_threshold,
             )
             important_items = filtering_result.items
 
@@ -1072,7 +1073,12 @@ class HorizonOrchestrator:
             f"   Re-analyzing {len(expanded)} Twitter items with reply context...\n"
         )
         ai_client = create_ai_client(self.config.ai)
-        analyzer = ContentAnalyzer(ai_client, self.profiles, console=self.console)
+        analyzer = ContentAnalyzer(
+            ai_client,
+            self.profiles,
+            console=self.console,
+            focus_topics=self.config.filtering.focus_topics,
+        )
         await analyzer.analyze_batch(expanded)
 
     async def enrich_items(self, items: List[ContentItem]) -> EnrichmentBatchResult:
@@ -1121,7 +1127,12 @@ class HorizonOrchestrator:
         self.console.print(f"{self.icons['ai']} Analyzing content with AI...")
 
         ai_client = create_ai_client(self.config.ai)
-        analyzer = ContentAnalyzer(ai_client, self.profiles, console=self.console)
+        analyzer = ContentAnalyzer(
+            ai_client,
+            self.profiles,
+            console=self.console,
+            focus_topics=self.config.filtering.focus_topics,
+        )
 
         return await analyzer.analyze_batch(items)
 

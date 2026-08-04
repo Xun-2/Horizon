@@ -4,7 +4,12 @@ from pathlib import Path
 from pydantic import ValidationError
 import pytest
 
-from src.models import Config, GitHubPagesConfig, PushPlusClawBotConfig
+from src.models import (
+    Config,
+    FilteringConfig,
+    GitHubPagesConfig,
+    PushPlusClawBotConfig,
+)
 
 
 @pytest.fixture
@@ -60,6 +65,17 @@ def test_clawbot_contract_rejects_fallback_values(field):
 def test_pages_contract_rejects_other_repository():
     with pytest.raises(ValidationError, match="Xun-2/Horizon"):
         GitHubPagesConfig(repository="someone/else")
+
+
+def test_filtering_contract_trims_topics_and_rejects_unsafe_values():
+    config = FilteringConfig(focus_topics=[" AI 模型 ", "模型安全"])
+
+    assert config.focus_topics == ["AI 模型", "模型安全"]
+    assert config.ai_score_threshold == 6.5
+
+    for topics in ([], ["unsafe\x00topic"], ["x" * 81]):
+        with pytest.raises(ValidationError):
+            FilteringConfig(focus_topics=topics)
 
 
 def test_main_config_accepts_delivery_blocks(valid_config_dict):

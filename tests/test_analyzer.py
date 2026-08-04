@@ -168,6 +168,35 @@ def test_analysis_prompt_combines_common_rules_and_profile_policy():
     assert "# Output contract" in prompt
 
 
+def test_focus_topics_are_added_to_trusted_system_context():
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return json.dumps(
+            {
+                "score": 8,
+                "reason": "Relevant",
+                "summary": "A useful update",
+                "tags": ["ai"],
+            }
+        )
+
+    item = _make_item("rss:test:focus")
+    asyncio.run(
+        ContentAnalyzer(
+            SimpleNamespace(complete=complete),
+            PROFILES,
+            focus_topics=["AI 模型", "模型安全"],
+        )._analyze_item(item)
+    )
+
+    assert "AI 模型" in requests[0]["system"]
+    assert "模型安全" in requests[0]["system"]
+    assert item.title not in requests[0]["system"]
+    assert item.title in requests[0]["user"]
+
+
 def test_analyze_item_repairs_invalid_result_once():
     responses = iter(
         [

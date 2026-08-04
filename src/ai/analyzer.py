@@ -28,11 +28,24 @@ class ContentAnalyzer:
         ai_client: AIClient,
         profiles: ProfileRegistry,
         console: Optional[Console] = None,
+        focus_topics: Optional[List[str]] = None,
     ):
         self.client = ai_client
         self.profiles = profiles
         self.classifier = ContentClassifier(ai_client, profiles)
         self.console = console or Console(stderr=True)
+        self.focus_topics = list(focus_topics or [])
+
+    def _analysis_system_prompt(self, profile) -> str:
+        prompt = analysis_system_prompt(profile)
+        if not self.focus_topics:
+            return prompt
+        topics = "\n".join(f"- {topic}" for topic in self.focus_topics)
+        return (
+            f"{prompt}\n\n# Trusted user focus topics\n\n{topics}\n\n"
+            "Score content outside these focus topics low, even when it is "
+            "generally interesting."
+        )
 
     @staticmethod
     def _parse_json_response(response: str) -> Optional[dict]:
@@ -153,7 +166,7 @@ class ContentAnalyzer:
 
         # Get AI completion
         response = await self.client.complete(
-            system=analysis_system_prompt(profile),
+            system=self._analysis_system_prompt(profile),
             user=user_prompt,
         )
 
@@ -163,7 +176,7 @@ class ContentAnalyzer:
         )
         if result is None:
             repair_response = await self.client.complete(
-                system=analysis_system_prompt(profile),
+                system=self._analysis_system_prompt(profile),
                 user=(
                     user_prompt
                     + "\n\nYour previous response did not satisfy the output contract "
