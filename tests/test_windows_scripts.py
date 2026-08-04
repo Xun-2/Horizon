@@ -9,6 +9,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "run_horizon.ps1"
+RECOVERY_RUNNER = ROOT / "scripts" / "run_cloud_recovery.ps1"
 INSTALLER = ROOT / "scripts" / "install_scheduled_task.ps1"
 UNINSTALLER = ROOT / "scripts" / "uninstall_scheduled_task.ps1"
 SECRET_SETUP = ROOT / "scripts" / "setup_local_secrets.ps1"
@@ -39,6 +40,29 @@ def _new_logs(before: set[Path]) -> set[Path]:
     log_dir = ROOT / "logs"
     after = set(log_dir.glob("horizon-*.log")) if log_dir.exists() else set()
     return after - before
+
+
+def _new_recovery_logs(before: set[Path]) -> set[Path]:
+    log_dir = ROOT / "logs"
+    after = set(log_dir.glob("cloud-recovery-*.log")) if log_dir.exists() else set()
+    return after - before
+
+
+def _fake_uv_capture(tmp_path: Path) -> Path:
+    fake_uv = tmp_path / "fake-uv.ps1"
+    fake_uv.write_text(
+        """
+$payload = [ordered]@{
+    working_directory = (Get-Location).Path
+    uv_cache_dir = $env:UV_CACHE_DIR
+    arguments = @($args)
+}
+$payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:HORIZON_TEST_CAPTURE -Encoding utf8
+exit 0
+""".strip(),
+        encoding="utf-8",
+    )
+    return fake_uv
 
 
 def _copy_secret_setup(tmp_path: Path) -> Path:
@@ -290,22 +314,114 @@ exit 0
         (ROOT / "logs" / "horizon.lock").unlink(missing_ok=True)
 
 
-def test_installer_whatif_reports_full_daily_contract_without_registration():
-    result = _powershell(INSTALLER, "-WhatIf")
+def test_recovery_runner_uses_repo_cache_and_recover_command(tmp_path):
+    capture = tmp_path / "capture.json"
+    fake_uv = _fake_uv_capture(tmp_path)
+    log_dir = ROOT / "logs"
+    before = (
+        set(log_dir.glob("cloud-recovery-*.log")) if log_dir.exists() else set()
+    )
+    result = _powershell(
+        RECOVERY_RUNNER,
+        "-UvExecutable",
+        str(fake_uv),
+        env=dict(os.environ, HORIZON_TEST_CAPTURE=str(capture)),
+    )
 
+    created_logs = _new_recovery_logs(before)
+    try:
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(capture.read_text(encoding="utf-8-sig"))
+        assert Path(payload["working_directory"]) == ROOT
+        assert Path(payload["uv_cache_dir"]) == ROOT / ".uv" / "cache"
+        assert payload["arguments"] == [
+            "run",
+            "python",
+            "scripts/github_actions_recovery.py",
+            "recover",
+        ]
+        assert len(created_logs) == 1
+    finally:
+        for path in created_logs:
+            path.unlink(missing_ok=True)
+
+
+def test_recovery_runner_exclusive_lock_rejects_second_instance(tmp_path):
+    started = tmp_path / "started"
+    release = tmp_path / "release"
+    fake_uv = tmp_path / "blocking-uv.ps1"
+    fake_uv.write_text(
+        """
+Set-Content -LiteralPath $env:HORIZON_TEST_STARTED -Value started
+while (-not (Test-Path -LiteralPath $env:HORIZON_TEST_RELEASE)) {
+    Start-Sleep -Milliseconds 50
+}
+exit 0
+""".strip(),
+        encoding="utf-8",
+    )
+    environment = dict(
+        os.environ,
+        HORIZON_TEST_STARTED=str(started),
+        HORIZON_TEST_RELEASE=str(release),
+    )
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(RECOVERY_RUNNER),
+        "-UvExecutable",
+        str(fake_uv),
+    ]
+    log_dir = ROOT / "logs"
+    before = (
+        set(log_dir.glob("cloud-recovery-*.log")) if log_dir.exists() else set()
+    )
+    first = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert started.exists(), "first recovery runner did not reach fake uv"
+
+        second = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+            check=False,
+        )
+        assert second.returncode == 3
+        assert "already running" in second.stderr.lower()
+    finally:
+        release.write_text("release", encoding="utf-8")
+        first.communicate(timeout=10)
+        for path in _new_recovery_logs(before):
+            path.unlink(missing_ok=True)
+        (ROOT / "logs" / "cloud-recovery.lock").unlink(missing_ok=True)
+
+
+def test_installer_whatif_reports_cloud_recovery_triggers():
+    result = _powershell(INSTALLER, "-WhatIf")
     assert result.returncode == 0, result.stdout + result.stderr
     contract = json.loads(result.stdout.strip())
-    assert contract == {
-        "task_name": "HorizonLocalAIRadar",
-        "action": "register",
-        "schedule": "daily 07:22",
-        "time_zone": "China Standard Time",
-        "start_when_available": True,
-        "wake_to_run": True,
-        "multiple_instances": "IgnoreNew",
-        "execution_time_limit": "PT2H",
-        "working_directory": str(ROOT),
-    }
+
+    assert contract["action_script"].endswith("run_cloud_recovery.ps1")
+    assert contract["triggers"] == ["at logon", "daily 07:45"]
+    assert contract["multiple_instances"] == "IgnoreNew"
 
 
 def test_uninstaller_whatif_only_reports_exact_task():
