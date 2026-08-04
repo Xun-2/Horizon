@@ -156,13 +156,32 @@ def print_config_template():
   },
   "digest": {
     "max_items": null,
+    "profile_order": [
+      "tech-news",
+      "tech-blog",
+      "finance-news"
+    ],
     "category_groups": {},
     "default_group": "other",
     "default_group_limit": null
   },
   "processing": {
     "profiles_dir": "profiles",
-    "default_profile": "tech-news"
+    "default_profile": "tech-news",
+    "profile_settings": {
+      "tech-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      },
+      "tech-blog": {
+        "threshold": 4.0,
+        "topic_dedup": false
+      },
+      "finance-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      }
+    }
   }
 }
 

@@ -15,7 +15,9 @@ from src.models import (
     ContentAnalysis,
     ContentItem,
     DigestConfig,
+    ProcessingConfig,
     ProcessingResult,
+    ProfileSettingsConfig,
     SourceType,
     SourcesConfig,
 )
@@ -46,7 +48,18 @@ def make_item(item_id: str, score: float, category: str | None) -> ContentItem:
 
 def make_orchestrator(digest: DigestConfig) -> HorizonOrchestrator:
     orchestrator = HorizonOrchestrator.__new__(HorizonOrchestrator)
-    orchestrator.config = SimpleNamespace(digest=digest)
+    orchestrator.config = SimpleNamespace(
+        digest=digest,
+        processing=ProcessingConfig(
+            profile_settings={
+                "tech-news": ProfileSettingsConfig(threshold=7.0),
+                "tech-blog": ProfileSettingsConfig(
+                    threshold=4.0, topic_dedup=False
+                ),
+                "finance-news": ProfileSettingsConfig(threshold=7.0),
+            }
+        ),
+    )
     orchestrator.console = Console(record=True)
     return orchestrator
 
@@ -139,6 +152,62 @@ def test_filter_items_skips_ai_topic_dedup_for_disabled_profile(monkeypatch) -> 
     assert [item.id for item in result.items] == ["first", "second"]
 
 
+def test_runtime_threshold_override_takes_priority() -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    item = make_item("item", 7.5, "ai")
+
+    assert orchestrator.passes_profile_filter(item)
+    assert not orchestrator.passes_profile_filter(item, threshold=8.0)
+
+
+def test_profile_without_threshold_bypasses_score_filter() -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    orchestrator.config.processing.profile_settings = {}
+
+    assert orchestrator.passes_profile_filter(make_item("item", 1.0, "ai"))
+
+
+def test_rejects_settings_for_unknown_profile() -> None:
+    config = Config(
+        ai=AIConfig(
+            provider="openai",
+            model="test",
+            api_key_env="TEST_API_KEY",
+        ),
+        sources=SourcesConfig(),
+        processing=ProcessingConfig(
+            profile_settings={
+                "missing": ProfileSettingsConfig(threshold=7.0)
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unknown processing profile: missing"):
+        HorizonOrchestrator(config, SimpleNamespace())
+
+
+@pytest.mark.parametrize(
+    "profile_order",
+    [
+        ["tech-news", "tech-blog"],
+        ["tech-news", "tech-blog", "finance-news", "missing"],
+    ],
+)
+def test_rejects_incomplete_or_unknown_profile_order(profile_order) -> None:
+    config = Config(
+        ai=AIConfig(
+            provider="openai",
+            model="test",
+            api_key_env="TEST_API_KEY",
+        ),
+        sources=SourcesConfig(),
+        digest=DigestConfig(profile_order=profile_order),
+    )
+
+    with pytest.raises(ValueError, match="must list every loaded profile"):
+        HorizonOrchestrator(config, SimpleNamespace())
+
+
 def test_duplicate_category_warns_and_first_group_wins() -> None:
     filtering = DigestConfig(
         category_groups={
@@ -164,9 +233,11 @@ def test_duplicate_category_warns_and_first_group_wins() -> None:
         {"default_group_limit": 0},
         {"category_groups": {"ai": {"limit": 0, "categories": ["ai"]}}},
         {"category_groups": {"ai": {"limit": 1, "categories": []}}},
+        {"profile_order": ["tech-news", "tech-news"]},
+        {"profile_order": ["tech-news", ""]},
     ],
 )
-def test_balanced_digest_config_rejects_non_positive_or_empty_limits(kwargs) -> None:
+def test_digest_config_rejects_invalid_values(kwargs) -> None:
     with pytest.raises(ValidationError):
         DigestConfig(**kwargs)
 
@@ -180,6 +251,11 @@ def test_run_applies_balanced_digest_before_enrichment(tmp_path, monkeypatch) ->
             languages=[],
         ),
         sources=SourcesConfig(),
+        processing=ProcessingConfig(
+            profile_settings={
+                "tech-news": ProfileSettingsConfig(threshold=7.0)
+            }
+        ),
         digest=DigestConfig(
             max_items=1,
             category_groups={

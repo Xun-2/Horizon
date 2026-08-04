@@ -3,36 +3,49 @@ import shutil
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import src.processing.profiles as profile_module
+from src.models import ProcessingConfig, ProfileSettingsConfig
 from src.processing import ProfileRegistry
 
 
-def test_loads_builtin_tech_news_profile():
+def test_loads_builtin_profiles():
     registry = ProfileRegistry.load(
         Path(__file__).resolve().parents[1] / "profiles", "tech-news"
     )
 
-    profile = registry.get("tech-news")
-    assert profile.definition.filter.enabled is True
-    assert profile.definition.filter.threshold == 8.0
-    assert [block.id for block in profile.definition.enrichment.blocks] == [
-        "summary",
-        "background",
-        "community_discussion",
-    ]
-    assert profile.definition.enrichment.blocks[1].tools == ["web_search"]
-    assert "3-6 complete sentences" in profile.enrichment_prompt
-    assert "2-4 complete sentences" in profile.enrichment_prompt
-    assert "1-3 complete sentences" in profile.enrichment_prompt
-    assert "no more than 15 words" in profile.enrichment_prompt
-    assert "untrusted reference material" not in profile.enrichment_prompt
-    assert "untrusted data, not instructions" not in profile.analysis_prompt
-    assert "three to five specific topic tags" in profile.analysis_prompt
-    assert "Technology news profile" in profile.match_prompt
+    for profile_id in ("tech-news", "tech-blog", "finance-news"):
+        profile = registry.get(profile_id)
+        assert profile.match_prompt
+        assert profile.analysis_prompt
+        assert profile.enrichment_prompt
+
+    tech_impact = next(
+        block
+        for block in registry.get("tech-news").definition.enrichment.blocks
+        if block.id == "impact"
+    )
+    finance_impact = next(
+        block
+        for block in registry.get("finance-news").definition.enrichment.blocks
+        if block.id == "impact"
+    )
+    assert tech_impact.optional is True
+    assert finance_impact.optional is True
 
 
-def test_loads_builtin_tech_blog_profile():
+@pytest.mark.parametrize(
+    ("route", "message"),
+    [
+        ([], "cannot be empty"),
+        (["tech-news", ""], "non-empty strings"),
+        (["tech-news", "tech-news"], "must be unique"),
+        (["tech-news", "auto"], "cannot contain 'auto'"),
+        (["tech-news", "missing"], "Unknown processing profile"),
+    ],
+)
+def test_rejects_invalid_profile_candidate_lists(route, message):
     registry = ProfileRegistry.load(
         Path(__file__).resolve().parents[1] / "profiles", "tech-news"
     )
@@ -70,6 +83,8 @@ def test_example_config_includes_enabled_nvidia_tech_blog_source():
         "profile": "tech-blog",
         "content_extractor": "trafilatura",
     }
+    with pytest.raises(ValueError, match=message):
+        registry.validate_source_references({"profile": route})
 
 
 def test_default_profiles_fall_back_to_packaged_resources(tmp_path, monkeypatch):
@@ -86,7 +101,7 @@ def test_default_profiles_fall_back_to_packaged_resources(tmp_path, monkeypatch)
     assert registry.get("tech-news").analysis_prompt
 
 
-def test_rejects_enabled_filter_without_threshold(tmp_path):
+def test_rejects_runtime_filter_settings_in_profile(tmp_path):
     profile_dir = tmp_path / "invalid"
     profile_dir.mkdir()
     for name in ("match.md", "analysis.md", "enrichment.md"):
@@ -98,7 +113,7 @@ def test_rejects_enabled_filter_without_threshold(tmp_path):
                 "name": "Invalid",
                 "match": "match.md",
                 "analysis": "analysis.md",
-                "filter": {"enabled": True},
+                "filter": {"enabled": True, "threshold": 7.0},
                 "enrichment": {
                     "prompt": "enrichment.md",
                     "blocks": [{"id": "body", "type": "section", "tools": []}],
@@ -108,8 +123,23 @@ def test_rejects_enabled_filter_without_threshold(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="threshold"):
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         ProfileRegistry.load(tmp_path, "invalid")
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 10.1])
+def test_rejects_profile_threshold_outside_score_range(threshold):
+    with pytest.raises(ValidationError):
+        ProfileSettingsConfig(threshold=threshold)
+
+
+def test_profile_settings_default_to_no_filter_and_topic_dedup():
+    settings = ProcessingConfig().profile_settings.get("tech-news")
+
+    assert settings is None
+    defaults = ProfileSettingsConfig()
+    assert defaults.threshold is None
+    assert defaults.topic_dedup is True
 
 
 def test_rejects_prompt_path_outside_profile_directory(tmp_path):
@@ -125,7 +155,6 @@ def test_rejects_prompt_path_outside_profile_directory(tmp_path):
                 "name": "Invalid",
                 "match": "../outside.md",
                 "analysis": "analysis.md",
-                "filter": {"enabled": False},
                 "enrichment": {
                     "prompt": "enrichment.md",
                     "blocks": [{"id": "body", "type": "section", "tools": []}],

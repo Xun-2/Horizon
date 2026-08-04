@@ -14,6 +14,7 @@ def item(
     source_type: SourceType = SourceType.RSS,
     content: str | None = None,
     metadata: dict | None = None,
+    profile: str | list[str] | None = None,
 ) -> ContentItem:
     return ContentItem(
         id=item_id,
@@ -23,6 +24,7 @@ def item(
         content=content,
         published_at=NOW,
         metadata=metadata or {},
+        profile=profile,
     )
 
 
@@ -138,3 +140,30 @@ def test_returns_deep_copies_without_mutation_and_is_idempotent() -> None:
     assert first[0].metadata["nested"] is not singleton.metadata["nested"]
     assert first[1] is not primary
     assert first[1].metadata["nested"] is not duplicate.metadata["nested"]
+
+
+def test_candidate_profile_routes_are_hashable_and_preserve_route_distinctions() -> None:
+    items = [
+        item(
+            "candidate-one",
+            "https://example.com/story",
+            profile=["tech-news", "finance-news"],
+        ),
+        item(
+            "candidate-two",
+            "https://example.com/story/",
+            source_type=SourceType.TELEGRAM,
+            profile=["tech-news", "finance-news"],
+        ),
+        item(
+            "different-order",
+            "https://example.com/story",
+            profile=["finance-news", "tech-news"],
+        ),
+    ]
+
+    result = merge(items)
+
+    assert len(result) == 2
+    assert result[0].metadata["merged_sources"] == ["rss", "telegram"]
+    assert result[1].id == "different-order"

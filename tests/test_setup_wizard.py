@@ -75,6 +75,13 @@ def test_build_config_hackernews_follows_selection_and_count():
     assert wizard._count_sources(rss_config) == 1
     assert default_config.sources.hackernews.enabled is True
     assert wizard._count_sources(default_config) == 1
+    assert default_config.processing.profile_settings["tech-news"].threshold == 7.0
+    assert default_config.processing.profile_settings["tech-blog"].topic_dedup is False
+    assert default_config.digest.profile_order == [
+        "tech-news",
+        "tech-blog",
+        "finance-news",
+    ]
 
 
 def test_merge_configs_preserves_all_existing_configuration_and_deduplicates_lists():

@@ -77,7 +77,7 @@
 ## 功能特性
 
 - **📡 关注你的信息源** — 将 Hacker News、RSS、Reddit、Telegram、Twitter/X、GitHub Release / 用户动态，以及 OpenBB 金融新闻观察列表纳入同一条 pipeline
-- **🤖 把噪声变成阅读清单** — 通过处理配置文件为每条内容选择分析提示词和筛选阈值
+- **🤖 把噪声变成阅读清单** — 使用稳定的处理配置文件分析内容，并应用你自己的筛选阈值
 - **🔗 合并重复新闻** — 在生成日报前自动合并来自不同平台的相同故事
 - **🔍 补全背景知识** — 为陌生概念、公司、项目和技术术语补充网络搜索得到的背景解释
 - **💬 读到社区声音** — 收集并总结 Hacker News、Reddit 等来源的评论讨论
@@ -164,7 +164,7 @@ flowchart LR
 1. **定义** — 配置信息源、处理配置文件、模型、语言和分发方式。
 2. **抓取** — 并发拉取所有已配置信息源的最新内容。
 3. **去重** — 合并来自不同平台、指向同一故事或 URL 的内容。
-4. **分析与过滤** — 选择处理配置文件，按其提示词分析内容并应用对应筛选规则。
+4. **分析与过滤** — 选择处理配置文件，按其提示词分析内容并应用用户配置的阈值。
 5. **丰富** — 生成配置文件定义的内容区块，每个区块只能调用已声明的工具。
 6. **总结** — 将本地化标题、导语、章节和引用来源渲染为 Markdown 日报。
 7. **分发** — 将结果发布到 GitHub Pages、邮件、飞书等 webhook、MCP 或本地文件。
@@ -271,14 +271,21 @@ cp data/config.example.json data/config.json  # 自定义信息源
   },
   "processing": {
     "profiles_dir": "profiles",
-    "default_profile": "tech-news"
+    "default_profile": "tech-news",
+    "profile_settings": {
+      "tech-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      }
+    }
   }
 }
 ```
 
 信息源显式指定 `profile` 时会直接使用该配置文件；省略该字段或设为
 `"auto"` 时，AI 会在可用配置文件中自动匹配。结构和行为详见
-[处理配置文件](docs/profiles.md)。
+[处理配置文件](docs/profiles.md)。筛选阈值和主题去重等个人偏好应配置在
+`processing.profile_settings`，而不是写入处理配置文件。
 
 **均衡日报（可选）**
 
@@ -369,7 +376,7 @@ Horizon 支持通过多种方式发布和分发生成的日报：
 | 文档 | 内容 |
 |------|------|
 | [配置指南](docs/configuration.md) | AI 模型、信息源、处理配置文件、过滤、邮件、Webhook、GitHub Pages 和 MCP 配置 |
-| [处理配置文件](docs/profiles.md) | 配置文件路由、提示词、筛选、丰富区块和工具 |
+| [处理配置文件](docs/profiles.md) | 配置文件路由、提示词、运行时筛选偏好、丰富区块和工具 |
 | [评分机制](docs/scoring.md) | Horizon 如何评估和排序新闻 |
 | [抓取器](docs/scrapers.md) | 信息源抓取器说明和扩展细节 |
 | [内容提取器](docs/extractors.md) | RSS 信息源的全文提取 |

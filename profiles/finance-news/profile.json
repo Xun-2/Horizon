@@ -1,11 +1,16 @@
 {
-  "id": "tech-news",
-  "name": "Technology News",
+  "id": "finance-news",
+  "name": "Financial News",
   "display_names": {
-    "zh": "科技新闻"
+    "zh": "财经新闻"
   },
   "match": "match.md",
   "analysis": "analysis.md",
+  "content": {
+    "analysis_max_chars": 4000,
+    "enrichment_max_chars": 8000,
+    "sampling": "prefix"
+  },
   "enrichment": {
     "prompt": "enrichment.md",
     "blocks": [
@@ -24,12 +29,6 @@
         "id": "impact",
         "type": "section",
         "tools": ["web_search"],
-        "optional": true
-      },
-      {
-        "id": "community_discussion",
-        "type": "section",
-        "tools": [],
         "optional": true
       }
     ]

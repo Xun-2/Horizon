@@ -25,9 +25,8 @@ PROFILES = ProfileRegistry.load(
 def test_tool_planning_excludes_profile_writing_policy():
     profile = PROFILES.get("tech-news")
     blocks = profile.definition.enrichment.blocks
-    allowed = {block.id: set(block.tools) for block in blocks}
 
-    planning = tool_planning_prompt(allowed)
+    planning = tool_planning_prompt(blocks)
     artifact = artifact_prompt(profile, "en", blocks)
     block = block_prompt(profile, "en", blocks[0], include_header=True)
 
@@ -35,6 +34,7 @@ def test_tool_planning_excludes_profile_writing_policy():
     assert profile.enrichment_prompt in artifact
     assert profile.enrichment_prompt in block
     assert all(configured.id in planning for configured in blocks)
+    assert "Block `background` is required" in planning
 
 
 def test_enrichment_context_uses_profile_content_budget():

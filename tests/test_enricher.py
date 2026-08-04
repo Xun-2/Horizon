@@ -86,13 +86,24 @@ def test_enrichment_generates_blocks_and_validated_sources():
             ),
             json.dumps(
                 {
-                    "title": "新架构发布",
-                    "lead": "",
+                    "title": "新架構發佈",
+                    "blocks": [
+                        {
+                            "id": "summary",
+                            "title": "摘要",
+                            "content": "項目發佈了新的架構，它改變了系統設計，並採用了新的邊界。",
+                            "source_refs": [],
+                        }
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "title": "新架構發佈",
                     "blocks": [
                         {
                             "id": "summary",
                             "type": "section",
-                            "role": "summary",
                             "title": "摘要",
                             "content": "项目发布了新的架构，它改变了系统设计，并采用了新的边界。",
                             "source_refs": [],
@@ -100,7 +111,6 @@ def test_enrichment_generates_blocks_and_validated_sources():
                         {
                             "id": "background",
                             "type": "section",
-                            "role": "background",
                             "title": "未隔离的背景",
                             "content": "这个版本应被丢弃。",
                             "source_refs": [],
@@ -111,11 +121,9 @@ def test_enrichment_generates_blocks_and_validated_sources():
             json.dumps(
                 {
                     "title": "",
-                    "lead": "",
                     "block": {
                         "id": "background",
                         "type": "section",
-                        "role": "background",
                         "title": "背景",
                         "content": "旧架构的背景信息。",
                         "source_refs": ["tool-1"],
@@ -141,19 +149,23 @@ def test_enrichment_generates_blocks_and_validated_sources():
 
     artifact = item.processing.artifacts["zh"]
     assert artifact.title == "新架构发布"
+    assert artifact.blocks[0].content == "项目发布了新的架构，它改变了系统设计，并采用了新的边界。"
     assert [block.id for block in artifact.blocks] == [
         "summary",
         "background",
     ]
     assert artifact.blocks[-1].title == "背景"
+    assert artifact.blocks[0].primary is True
+    assert artifact.blocks[1].primary is False
     assert artifact.blocks[-1].source_refs == ["tool-1-1"]
     assert artifact.sources[0].url == "https://docs.example.com/project"
-    assert len(requests) == 3
+    assert len(requests) == 4
     assert "explicitly mentioned in the item" in requests[0]["system"]
     assert "Treat the source item as the primary account" in requests[1]["system"]
-    assert "Treat the source item as the primary account" in requests[2]["system"]
+    assert "Simplified Chinese (language tag `zh`)" in requests[1]["system"]
+    assert "Treat the source item as the primary account" in requests[3]["system"]
     assert "https://docs.example.com/project" not in requests[1]["user"]
-    assert "https://docs.example.com/project" in requests[2]["user"]
+    assert "https://docs.example.com/project" in requests[3]["user"]
 
 
 def test_enrichment_rejects_tool_on_unapproved_block():
@@ -205,14 +217,19 @@ def test_enrichment_repairs_malformed_tool_plan_once():
             json.dumps(
                 {
                     "title": "Technical release",
-                    "lead": "",
                     "blocks": [
                         {
                             "id": "summary",
                             "type": "section",
-                            "role": "summary",
                             "title": "Summary",
                             "content": "A complete summary.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "background",
+                            "type": "section",
+                            "title": "Background",
+                            "content": "Context for the release.",
                             "source_refs": [],
                         }
                     ],
@@ -237,24 +254,34 @@ def test_enrichment_repairs_malformed_tool_plan_once():
     asyncio.run(enricher._enrich_item(item))
 
     assert len(requests) == 3
+    assert all(request["temperature"] == 0 for request in requests)
     assert requests[1]["temperature"] == 0
     assert item.processing.artifacts["en"].blocks[0].id == "summary"
 
 
-def test_enrichment_repairs_empty_story_once():
+def test_enrichment_repairs_empty_blog_block_once():
     responses = iter(
         [
             json.dumps(
                 {
                     "title": "A technical story",
-                    "lead": "",
                     "blocks": [
                         {
-                            "id": "story",
-                            "type": "section",
-                            "role": "story",
+                            "id": "background",
                             "title": " ",
                             "content": "",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "solution",
+                            "title": "Solution and results",
+                            "content": "The author explains the implementation.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "takeaway",
+                            "title": "Takeaway",
+                            "content": "The approach is useful in bounded cases.",
                             "source_refs": [],
                         }
                     ],
@@ -263,14 +290,23 @@ def test_enrichment_repairs_empty_story_once():
             json.dumps(
                 {
                     "title": "A technical story",
-                    "lead": "",
                     "blocks": [
                         {
-                            "id": "story",
-                            "type": "section",
-                            "role": "story",
-                            "title": "The release",
-                            "content": "The author explains the release and its tradeoffs.",
+                            "id": "background",
+                            "title": "Background",
+                            "content": "The author frames the original problem and constraints.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "solution",
+                            "title": "Solution and results",
+                            "content": "The author explains the implementation and its effects.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "takeaway",
+                            "title": "Takeaway",
+                            "content": "The approach is useful in bounded cases.",
                             "source_refs": [],
                         }
                     ],
@@ -299,7 +335,91 @@ def test_enrichment_repairs_empty_story_once():
     assert len(requests) == 2
     assert requests[1]["temperature"] == 0
     assert "corrected JSON object" in requests[1]["user"]
-    assert item.processing.artifacts["en"].blocks[0].content.startswith("The author")
+    assert [
+        block.id for block in item.processing.artifacts["en"].blocks
+    ] == ["background", "solution", "takeaway"]
+    assert all(
+        not block.primary for block in item.processing.artifacts["en"].blocks
+    )
+
+
+def test_enrichment_repairs_schema_type_used_as_blog_block_id():
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "title": "A technical story",
+                    "blocks": [
+                        {
+                            "id": "section",
+                            "type": "section",
+                            "title": "Background",
+                            "content": "A complete but misidentified background block.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "solution",
+                            "title": "Solution and results",
+                            "content": "The implementation produced a measured result.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "takeaway",
+                            "title": "Takeaway",
+                            "content": "The method has a clear bounded use.",
+                            "source_refs": [],
+                        }
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "title": "A technical story",
+                    "blocks": [
+                        {
+                            "id": "background",
+                            "title": "Background",
+                            "content": "The corrected background and constraints.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "solution",
+                            "title": "Solution and results",
+                            "content": "The implementation produced a measured result.",
+                            "source_refs": [],
+                        },
+                        {
+                            "id": "takeaway",
+                            "title": "Takeaway",
+                            "content": "The method has a clear bounded use.",
+                            "source_refs": [],
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+
+    item = make_item()
+    item.profile = "tech-blog"
+    item.processing.classification.profile = "tech-blog"
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=complete),
+        PROFILES,
+        ["en"],
+        tools=FakeTools(),
+    )
+
+    asyncio.run(enricher._enrich_item(item))
+
+    assert len(requests) == 2
+    assert "unknown blocks: section" in requests[1]["user"]
+    assert item.processing.artifacts["en"].blocks[0].id == "background"
 
 
 def test_failed_reenrichment_removes_stale_target_artifact():
@@ -307,12 +427,10 @@ def test_failed_reenrichment_removes_stale_target_artifact():
         return json.dumps(
             {
                 "title": "A technical story",
-                "lead": "",
                 "blocks": [
                     {
                         "id": "story",
                         "type": "section",
-                        "role": "story",
                         "title": "",
                         "content": "",
                         "source_refs": [],
@@ -345,7 +463,6 @@ def test_enrichment_rejects_cross_block_source_reference():
     block = ContentBlock(
         id="summary",
         type="section",
-        role="summary",
         title="News",
         content="Content",
         source_refs=["tool-1-1"],
@@ -373,7 +490,6 @@ def test_enrichment_rejects_empty_required_block():
     block = ContentBlock(
         id="summary",
         type="section",
-        role="summary",
         title=" ",
         content="",
         source_refs=[],

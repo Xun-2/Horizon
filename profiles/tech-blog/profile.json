@@ -6,22 +6,26 @@
   },
   "match": "match.md",
   "analysis": "analysis.md",
-  "filter": {
-    "enabled": false
-  },
   "content": {
     "analysis_max_chars": 16000,
     "enrichment_max_chars": 24000,
     "sampling": "head-middle-tail"
   },
-  "topic_dedup": {
-    "enabled": false
-  },
   "enrichment": {
     "prompt": "enrichment.md",
     "blocks": [
       {
-        "id": "story",
+        "id": "background",
+        "type": "section",
+        "tools": []
+      },
+      {
+        "id": "solution",
+        "type": "section",
+        "tools": []
+      },
+      {
+        "id": "takeaway",
         "type": "section",
         "tools": []
       }

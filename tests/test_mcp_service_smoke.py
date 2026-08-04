@@ -13,7 +13,9 @@ from src.models import (
     ContentAnalysis,
     ContentItem,
     DigestConfig,
+    ProcessingConfig,
     ProcessingResult,
+    ProfileSettingsConfig,
     SourceType,
 )
 from src.ai.summarizer import DailySummarizer
@@ -347,6 +349,11 @@ def test_filter_items_matches_native_filtering_pipeline(tmp_path: Path, monkeypa
     filtering = DigestConfig(max_items=1)
     config = SimpleNamespace(
         digest=filtering,
+        processing=ProcessingConfig(
+            profile_settings={
+                "tech-news": ProfileSettingsConfig(threshold=7.0)
+            }
+        ),
         sources=SimpleNamespace(twitter=None),
     )
     items = [
@@ -413,6 +420,17 @@ def test_generate_summary_persists_informative_empty_summary(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = HorizonPipelineService(runs_root=tmp_path / "mcp-runs")
+    profile_order = ["tech-news", "tech-blog", "finance-news"]
+    received_orders = []
+
+    class RecordingSummarizer(DailySummarizer):
+        def __init__(self, *, profile_names=None, profile_order=None):  # type: ignore[no-untyped-def]
+            received_orders.append(profile_order)
+            super().__init__(
+                profile_names=profile_names,
+                profile_order=profile_order,
+            )
+
     monkeypatch.setattr(service, "_profiles", lambda ctx: PROFILES)
     service.run_store.create_run("run-empty")
     service.run_store.save_items("run-empty", "raw", [])
@@ -422,7 +440,12 @@ def test_generate_summary_persists_informative_empty_summary(
         service,
         "_build_context",
         lambda **kwargs: (
-            SimpleNamespace(runtime=SimpleNamespace(DailySummarizer=DailySummarizer)),
+            SimpleNamespace(
+                runtime=SimpleNamespace(DailySummarizer=RecordingSummarizer),
+                config=SimpleNamespace(
+                    digest=SimpleNamespace(profile_order=profile_order)
+                ),
+            ),
             [],
             [],
         ),
@@ -441,6 +464,7 @@ def test_generate_summary_persists_informative_empty_summary(
     persisted = Path(result["summary_path"]).read_text(encoding="utf-8")
 
     assert result["items_used"] == 0
+    assert received_orders == [profile_order]
     assert persisted == expected
     assert result["preview"] == expected[:1200]
 

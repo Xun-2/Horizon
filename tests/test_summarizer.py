@@ -46,7 +46,14 @@ def _make_item(idx: int) -> ContentItem:
                 language: ContentArtifact(
                     language=language,
                     title=f"Important Item {idx}",
-                    lead=f"Summary for item {idx}.",
+                    blocks=[
+                        ContentBlock(
+                            id="summary",
+                            title="Summary",
+                            content=f"Summary for item {idx}.",
+                            primary=True,
+                        )
+                    ],
                 )
                 for language in ("en", "zh")
             },
@@ -441,6 +448,143 @@ def test_generate_summary_groups_items_by_profile_with_heading_hierarchy():
     assert "### [Important Item 2]" in result
 
 
+def test_generate_summary_uses_configured_profile_order():
+    finance = _make_item(1)
+    finance.profile = "finance-news"
+    finance.processing.classification.profile = "finance-news"
+    blog = _make_item(2)
+    blog.profile = "tech-blog"
+    blog.processing.classification.profile = "tech-blog"
+    news = _make_item(3)
+    summarizer = DailySummarizer(
+        profile_names={
+            "tech-news": {"default": "Technology News"},
+            "tech-blog": {"default": "Technology Blog"},
+            "finance-news": {"default": "Financial News"},
+        },
+        profile_order=["tech-news", "tech-blog", "finance-news"],
+    )
+
+    result = _run_async(
+        summarizer.generate_summary(
+            [finance, blog, news],
+            date="2026-04-25",
+            total_fetched=3,
+            language="en",
+        )
+    )
+
+    assert result.index("## Technology News") < result.index("## Technology Blog")
+    assert result.index("## Technology Blog") < result.index("## Financial News")
+
+
+def test_generate_summary_renders_primary_block_before_source_without_heading():
+    item = _make_item(1)
+    item.processing.artifacts["en"] = ContentArtifact(
+        language="en",
+        title="Important Item 1",
+        blocks=[
+            ContentBlock(
+                id="summary",
+                title="Summary",
+                content="Primary explanation.",
+                primary=True,
+            ),
+            ContentBlock(
+                id="background",
+                title="Background",
+                content="Supporting context.",
+            ),
+        ],
+    )
+
+    result = _run_async(
+        DailySummarizer().generate_summary(
+            [item],
+            date="2026-04-25",
+            total_fetched=1,
+            language="en",
+        )
+    )
+
+    assert "#### Summary" not in result
+    assert result.index("Primary explanation.") < result.index(
+        "rss · tester · Apr 25, 08:00"
+    )
+    assert result.index("rss · tester · Apr 25, 08:00") < result.index(
+        "**「Background」** Supporting context."
+    )
+
+
+def test_generate_summary_renders_non_primary_blog_sections_after_source():
+    item = _make_item(1)
+    item.profile = "tech-blog"
+    item.processing.classification.profile = "tech-blog"
+    item.processing.artifacts["en"] = ContentArtifact(
+        language="en",
+        title="A technical article",
+        blocks=[
+            ContentBlock(
+                id="background",
+                title="Background",
+                content="The original constraints.",
+            ),
+            ContentBlock(
+                id="solution",
+                title="Solution",
+                content="The implementation and evidence.",
+            ),
+            ContentBlock(
+                id="takeaway",
+                title="Takeaway",
+                content="The durable lesson.",
+            ),
+        ],
+    )
+
+    result = _run_async(
+        DailySummarizer().generate_summary(
+            [item],
+            date="2026-04-25",
+            total_fetched=1,
+            language="en",
+        )
+    )
+
+    source_index = result.index("rss · tester · Apr 25, 08:00")
+    context_index = result.index("**「Background」** The original constraints.")
+    solution_index = result.index("**「Solution」** The implementation and evidence.")
+    takeaway_index = result.index("**「Takeaway」** The durable lesson.")
+    assert source_index < context_index < solution_index < takeaway_index
+    assert "#### Background" not in result
+
+
+def test_generate_webhook_item_normalizes_existing_zh_artifact_to_simplified():
+    item = _make_item(1)
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title="代理工作流更新",
+        blocks=[
+            ContentBlock(
+                id="background",
+                title="背景",
+                content="社群關注這項更新，並分享實際用量數據。",
+            )
+        ],
+    )
+
+    result = DailySummarizer().generate_webhook_item(
+        item,
+        language="zh",
+        index=1,
+        total=1,
+    )
+
+    assert "代理工作流更新" in result
+    assert "**「背景」** 社群关注这项更新，并分享实际用量数据。" in result
+    assert "關注" not in result
+
+
 def test_generate_summary_renumbers_interleaved_profiles_and_localizes_headings():
     first_news = _make_item(1)
     blog = _make_item(2)
@@ -499,8 +643,13 @@ def test_generate_summary_escapes_untrusted_text_in_all_output_contexts():
     item.processing.artifacts["en"] = ContentArtifact(
         language="en",
         title=item.title,
-        lead='<img src=x onerror="alert(1)"> **summary**',
         blocks=[
+            ContentBlock(
+                id="summary",
+                title="Summary",
+                content='<img src=x onerror="alert(1)"> **summary**',
+                primary=True,
+            ),
             ContentBlock(
                 id="background",
                 title="Background",

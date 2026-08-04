@@ -10,31 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 BUILTIN_PROFILES_DIR = Path(__file__).resolve().parents[1] / "_builtin_profiles"
 
 
-class ProfileFilter(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool
-    threshold: Optional[float] = Field(default=None, ge=0, le=10)
-
-    @model_validator(mode="after")
-    def require_threshold_when_enabled(self) -> "ProfileFilter":
-        if self.enabled and self.threshold is None:
-            raise ValueError("filter.threshold is required when filtering is enabled")
-        return self
-
-
 class ProfileContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     analysis_max_chars: int = Field(default=1000, ge=500, le=100_000)
     enrichment_max_chars: int = Field(default=8000, ge=500, le=100_000)
     sampling: Literal["prefix", "head-middle-tail"] = "prefix"
-
-
-class ProfileTopicDedup(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
 
 
 class ProfileBlock(BaseModel):
@@ -44,6 +25,7 @@ class ProfileBlock(BaseModel):
     type: Literal["section"] = "section"
     tools: list[str] = Field(default_factory=list)
     optional: bool = False
+    primary: bool = False
 
 
 class ProfileEnrichment(BaseModel):
@@ -57,6 +39,11 @@ class ProfileEnrichment(BaseModel):
         ids = [block.id for block in self.blocks]
         if len(ids) != len(set(ids)):
             raise ValueError("enrichment block IDs must be unique")
+        primary_blocks = [block for block in self.blocks if block.primary]
+        if len(primary_blocks) > 1:
+            raise ValueError("enrichment may define at most one primary block")
+        if primary_blocks and primary_blocks[0].optional:
+            raise ValueError("the primary enrichment block must be required")
         return self
 
 
@@ -68,9 +55,7 @@ class ProfileDefinition(BaseModel):
     display_names: dict[str, str] = Field(default_factory=dict)
     match: str
     analysis: str
-    filter: ProfileFilter
     content: ProfileContent = Field(default_factory=ProfileContent)
-    topic_dedup: ProfileTopicDedup = Field(default_factory=ProfileTopicDedup)
     enrichment: ProfileEnrichment
 
 
@@ -154,6 +139,22 @@ class ProfileRegistry:
                 normalized = requested.strip()
                 if normalized and normalized != "auto":
                     self.get(normalized)
+            elif isinstance(requested, list):
+                normalized = [
+                    profile_id.strip()
+                    for profile_id in requested
+                    if isinstance(profile_id, str) and profile_id.strip()
+                ]
+                if not normalized:
+                    raise ValueError("profile candidate list cannot be empty")
+                if len(normalized) != len(requested):
+                    raise ValueError("profile candidates must be non-empty strings")
+                if len(normalized) != len(set(normalized)):
+                    raise ValueError("profile candidates must be unique")
+                if "auto" in normalized:
+                    raise ValueError("profile candidate list cannot contain 'auto'")
+                for profile_id in normalized:
+                    self.get(profile_id)
             for child in value.values():
                 self.validate_source_references(child)
         elif isinstance(value, list):

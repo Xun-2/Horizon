@@ -27,19 +27,21 @@ echo "$LOG_PREFIX Deploying to gh-pages..."
 
 # Use a temporary worktree to update gh-pages without switching branches
 TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+cleanup() {
+    cd "$PROJECT_DIR"
+    git worktree remove --force "$TMPDIR" 2>/dev/null || rm -rf "$TMPDIR"
+}
+trap cleanup EXIT
 
-git fetch origin gh-pages:gh-pages 2>/dev/null || git checkout --orphan gh-pages && git checkout main
+git worktree prune
+git fetch --quiet origin gh-pages
 
-git worktree add "$TMPDIR" gh-pages
+git worktree add --detach "$TMPDIR" origin/gh-pages
 cp -r docs/* "$TMPDIR/"
 
 cd "$TMPDIR"
 git add -A
 git commit -m "Daily Summary: $(date '+%Y-%m-%d')" || { echo "$LOG_PREFIX Nothing to commit."; exit 0; }
-git push origin gh-pages
-
-cd "$PROJECT_DIR"
-git worktree remove "$TMPDIR"
+git push origin HEAD:gh-pages
 
 echo "$LOG_PREFIX Done."

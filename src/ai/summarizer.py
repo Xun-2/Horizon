@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 from urllib.parse import quote, urlsplit
 
+from .localization import normalize_language
 from ..models import ContentItem
 
 
@@ -104,7 +105,7 @@ LABELS = {
             "- The AI score threshold is too high\n"
             "- Your information sources need expansion\n\n"
             "Consider:\n"
-            "1. Lowering the active profile's filter threshold\n"
+            "1. Lowering the configured profile threshold\n"
             "2. Adding more diverse information sources\n"
             "3. Checking if the AI model is working correctly\n"
         ),
@@ -201,14 +202,16 @@ class DailySummarizer:
     def __init__(
         self,
         profile_names: Optional[Dict[str, Dict[str, str]]] = None,
+        profile_order: Optional[List[str]] = None,
     ):
         self.profile_names = profile_names or {}
+        self.profile_order = profile_order or []
 
     @staticmethod
     def _profile_id(item: ContentItem) -> str:
         if item.processing:
             return item.processing.classification.profile
-        return item.profile or "unclassified"
+        return item.profile if isinstance(item.profile, str) else "unclassified"
 
     def profile_name(self, profile_id: str, language: str) -> str:
         names = self.profile_names.get(profile_id, {})
@@ -229,9 +232,20 @@ class DailySummarizer:
         for item in items:
             grouped_items.setdefault(self._profile_id(item), []).append(item)
 
+        ordered_groups = list(grouped_items.items())
+        if self.profile_order:
+            order = {
+                profile_id: index
+                for index, profile_id in enumerate(self.profile_order)
+            }
+            ordered_groups = sorted(
+                ordered_groups,
+                key=lambda group: order.get(group[0], len(order)),
+            )
+
         groups = []
         global_index = 1
-        for profile_id, profile_items in grouped_items.items():
+        for profile_id, profile_items in ordered_groups:
             view_items = []
             for index, item in enumerate(profile_items, start=1):
                 artifact = (
@@ -246,7 +260,9 @@ class DailySummarizer:
                         index=index,
                         global_index=global_index,
                         group_count=len(profile_items),
-                        title=artifact.title if artifact else item.title,
+                        title=normalize_language(
+                            artifact.title if artifact else item.title, language
+                        ),
                         score=(
                             analysis.score
                             if analysis and analysis.score is not None
@@ -259,7 +275,9 @@ class DailySummarizer:
             groups.append(
                 SummaryGroupView(
                     profile_id=profile_id,
-                    name=self.profile_name(profile_id, language),
+                    name=normalize_language(
+                        self.profile_name(profile_id, language), language
+                    ),
                     items=view_items,
                 )
             )
@@ -334,7 +352,7 @@ class DailySummarizer:
             )
 
         toc = "\n\n".join(toc_sections) + "\n\n---\n\n"
-        return header + toc + "".join(body_sections)
+        return normalize_language(header + toc + "".join(body_sections), language)
 
     @staticmethod
     def _friend_source(item: ContentItem) -> str:
@@ -556,7 +574,7 @@ class DailySummarizer:
                 )
             sections.append("\n".join(entries))
 
-        return header + "\n\n".join(sections)
+        return normalize_language(header + "\n\n".join(sections), language)
 
     def generate_webhook_item(
         self,
@@ -571,14 +589,18 @@ class DailySummarizer:
         """Generate one item message for multi-message webhook delivery."""
         labels = LABELS.get(language, LABELS["en"])
         prefix = f"第 {index}/{total} 条\n\n" if language == "zh" else f"Item {index}/{total}\n\n"
-        return prefix + self._format_item(
-            item,
-            labels,
+        return normalize_language(
+            prefix
+            + self._format_item(
+                item,
+                labels,
+                language,
+                index,
+                title_override=title,
+                score_override=score,
+            ).rstrip("-\n "),
             language,
-            index,
-            title_override=title,
-            score_override=score,
-        ).rstrip("-\n ")
+        )
 
     def _format_item(
         self,
@@ -608,13 +630,22 @@ class DailySummarizer:
         )
         meta = item.metadata
 
-        summary = artifact.lead if artifact else analysis.summary if analysis else ""
+        summary = analysis.summary if not artifact and analysis else ""
+        primary_block = (
+            next((block for block in artifact.blocks if block.primary), None)
+            if artifact
+            else None
+        )
 
         summary = _escape_markdown(summary)
+        primary_content = (
+            _escape_markdown(primary_block.content) if primary_block else ""
+        )
 
         if language == "zh":
             title = _pangu(title)
             summary = _pangu(summary)
+            primary_content = _pangu(primary_content)
 
         # Source line with parts joined by " · ", link appended at end
         source_type = item.source_type.value
@@ -647,22 +678,23 @@ class DailySummarizer:
         lines = [
             f'<a id="{anchor_id or f"item-{index}"}"></a>',
             f"{'#' * heading_level} {title_link} \u2b50\ufe0f {score}/10",  # ⭐️
-            "",
-            summary,
-            "",
-            source_line,
         ]
+        if summary.strip():
+            lines.extend(["", summary])
+        if primary_content.strip():
+            lines.extend(["", primary_content])
+        lines.extend(["", source_line])
 
         if artifact:
             for block in artifact.blocks:
+                if block.primary:
+                    continue
                 block_title = _escape_markdown(block.title)
                 block_content = _escape_markdown(block.content)
                 if language == "zh":
                     block_title = _pangu(block_title)
                     block_content = _pangu(block_content)
-                lines.extend(
-                    ["", f"{'#' * (heading_level + 1)} {block_title}", "", block_content]
-                )
+                lines.extend(["", f"**「{block_title}」** {block_content}"])
 
         sources = artifact.sources if artifact else []
         if sources:

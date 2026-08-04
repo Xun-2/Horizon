@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 from .base import BaseScraper
 from ..models import (
     ContentItem,
+    ProfileRoute,
     RedditConfig,
     RedditSubredditConfig,
     RedditUserConfig,
@@ -331,7 +332,7 @@ class RedditScraper(BaseScraper):
         source_name: str,
         min_score: int,
         category: Optional[str] = None,
-        profile: Optional[str] = None,
+        profile: ProfileRoute = None,
     ) -> List[ContentItem]:
         valid_posts = []
         comment_tasks = []
@@ -471,7 +472,7 @@ class RedditScraper(BaseScraper):
         comments: List[dict],
         subtype: str,
         category: Optional[str] = None,
-        profile: Optional[str] = None,
+        profile: ProfileRoute = None,
     ) -> Optional[ContentItem]:
         post_id = post["id"]
         title = post.get("title", "")

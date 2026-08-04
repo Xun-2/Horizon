@@ -5,9 +5,9 @@ title: Processing Profiles
 
 # Processing Profiles
 
-Processing profiles define how Horizon matches, analyzes, filters, enriches,
-and renders different kinds of content. They replace global score-threshold and
-fixed enrichment-field behavior.
+Processing profiles define how Horizon matches, analyzes, enriches, and renders
+different kinds of content. User preferences such as score thresholds and topic
+deduplication live in the runtime configuration so profiles remain stable.
 
 ## Directory Layout
 
@@ -15,6 +15,11 @@ Profiles live under `profiles/<id>/`:
 
 ```text
 profiles/
+|-- finance-news/
+|   |-- profile.json
+|   |-- match.md
+|   |-- analysis.md
+|   `-- enrichment.md
 |-- tech-news/
 |   |-- profile.json
 |   |-- match.md
@@ -36,12 +41,13 @@ profiles/
 
 | Profile | Purpose | Output |
 | --- | --- | --- |
-| `tech-news` | Timely releases, incidents, research results, and technology-industry developments | Compact summary with optional background and community discussion |
-| `tech-blog` | Long-form engineering deep dives, tutorials, investigations, retrospectives, and technical arguments | One structured, multi-paragraph `story` |
+| `finance-news` | Macroeconomics, markets, company finance, and economically material policy | Concise summary, necessary background, and optional direct impact |
+| `tech-news` | Timely releases, incidents, research results, and technology-industry developments | Compact summary and background with optional impact and community discussion |
+| `tech-blog` | Long-form engineering deep dives, tutorials, investigations, retrospectives, and technical arguments | Required background, solution, and takeaway sections |
 
-The blog profile uses larger input budgets, head-middle-tail sampling, no score
-filtering, and no AI topic deduplication. For RSS feeds, pair it with a full-text
-extractor so the profile receives the article rather than only the feed excerpt:
+The blog profile uses larger input budgets and head-middle-tail sampling. For RSS
+feeds, pair it with a full-text extractor so the profile receives the article
+rather than only the feed excerpt:
 
 ```json
 {
@@ -62,7 +68,17 @@ Configure discovery in `data/config.json`:
 {
   "processing": {
     "profiles_dir": "profiles",
-    "default_profile": "tech-news"
+    "default_profile": "tech-news",
+    "profile_settings": {
+      "tech-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      },
+      "tech-blog": {
+        "threshold": 4.0,
+        "topic_dedup": false
+      }
+    }
   }
 }
 ```
@@ -81,17 +97,10 @@ profiles are found or the default does not exist.
   },
   "match": "match.md",
   "analysis": "analysis.md",
-  "filter": {
-    "enabled": true,
-    "threshold": 8.0
-  },
   "content": {
     "analysis_max_chars": 1000,
     "enrichment_max_chars": 8000,
     "sampling": "prefix"
-  },
-  "topic_dedup": {
-    "enabled": true
   },
   "enrichment": {
     "prompt": "enrichment.md",
@@ -99,13 +108,13 @@ profiles are found or the default does not exist.
       {
         "id": "summary",
         "type": "section",
-        "tools": []
+        "tools": [],
+        "primary": true
       },
       {
         "id": "background",
         "type": "section",
-        "tools": ["web_search"],
-        "optional": true
+        "tools": ["web_search"]
       },
       {
         "id": "community_discussion",
@@ -125,9 +134,7 @@ profiles are found or the default does not exist.
 | `display_names` | Optional language-keyed names used as digest section headings. |
 | `match` | Profile-relative path to the matching prompt. |
 | `analysis` | Profile-relative path to the analysis prompt. |
-| `filter` | Per-profile score-filter configuration. |
 | `content` | Input budgets and long-content sampling strategy for AI stages. |
-| `topic_dedup` | Whether this profile participates in AI semantic topic deduplication. |
 | `enrichment.prompt` | Profile-relative path to the enrichment prompt. |
 | `enrichment.blocks` | Contract for localized output blocks. At least one block is required. |
 
@@ -141,6 +148,7 @@ default; set `optional` to `true` when they may be omitted.
 | `type` | Must be `"section"`. |
 | `tools` | Tools allowed for this block. Declare it on every block; use `[]` when none are allowed. |
 | `optional` | Whether output may omit the block. Defaults to `false`. |
+| `primary` | Render this required block directly below the item title without a block heading. At most one block may be primary. Defaults to `false`. |
 
 Prompt paths cannot escape their profile directory. Unknown fields are rejected
 in profile JSON.
@@ -163,14 +171,25 @@ Set `profile` on a source entry to route its items directly:
 }
 ```
 
+Set `profile` to an array to restrict automatic matching to a candidate subset:
+
+```json
+{
+  "channel": "zaihuapd",
+  "profile": ["tech-news", "finance-news"]
+}
+```
+
 Routing follows these rules:
 
 1. An explicit profile ID uses that profile and skips AI matching.
 2. A missing `profile` or `"auto"` invokes AI matching against every loaded
    profile's `match.md`.
-3. An unknown explicit profile ID is an error.
-4. If automatic matching fails, Horizon records the failure and uses
-   `processing.default_profile`.
+3. A non-empty profile array invokes AI matching only against those candidates.
+4. Unknown, duplicate, blank, or `"auto"` entries in a candidate array are errors.
+5. If candidate matching fails, Horizon uses `processing.default_profile` when
+   it is a candidate, otherwise the first candidate. Unrestricted matching falls
+   back to `processing.default_profile`.
 
 All source types support profile routing. For sources with nested entries, put
 `profile` on the item-producing configuration, such as a GitHub entry, RSS feed,
@@ -187,20 +206,25 @@ evaluate different content forms by different standards.
 
 ## Filtering
 
-Filtering belongs to the profile:
+Filtering is a user preference configured by profile ID under
+`processing.profile_settings`:
 
 ```json
 {
-  "filter": {
-    "enabled": true,
-    "threshold": 8.0
+  "processing": {
+    "profile_settings": {
+      "tech-news": {
+        "threshold": 8.0
+      }
+    }
   }
 }
 ```
 
-When enabled, `threshold` is required and must be between 0 and 10. Horizon
-keeps items whose analysis score is greater than or equal to that threshold.
-When disabled, the item bypasses score filtering and `threshold` may be omitted.
+`threshold` must be between 0 and 10. Horizon keeps items whose analysis score
+is greater than or equal to that threshold. Set it to `null` or omit settings for
+a profile to bypass score filtering. An MCP threshold supplied for a single
+operation takes precedence over these configured values.
 
 The top-level `collection` configuration controls `time_window_hours`. Optional
 balanced digest limits such as `category_groups` and `max_items` belong to the
@@ -217,6 +241,10 @@ Tools are allowed per block through its `tools` array. The only built-in tool is
 `web_search`, and a block may use it only when that block explicitly declares
 `"tools": ["web_search"]`. Use an empty array for blocks that need no tools.
 Unknown tools are rejected when profiles are initialized.
+
+Tool planning receives each block's required or optional status. For required
+blocks with tools, it uses a tool unless the source already provides enough
+evidence; tool failures do not make the block optional.
 
 ## Content Selection
 
@@ -239,16 +267,22 @@ must be between 500 and 100000 characters.
 
 ## Topic Deduplication
 
-AI topic deduplication can be disabled for profiles where different treatments
-of the same subject should remain separate:
+AI topic deduplication is also a runtime preference. Disable it for profiles
+where different treatments of the same subject should remain separate:
 
 ```json
 {
-  "topic_dedup": {
-    "enabled": false
+  "processing": {
+    "profile_settings": {
+      "tech-blog": {
+        "topic_dedup": false
+      }
+    }
   }
 }
 ```
+
+`topic_dedup` defaults to `true` when it or the profile's settings are omitted.
 
 This does not disable conservative cross-source URL deduplication. Items with
 the same normalized URL and requested Profile are still merged before analysis;
@@ -263,11 +297,17 @@ For each language in `ai.languages`, enrichment produces a localized artifact
 with:
 
 - a title;
-- an optional lead paragraph;
 - the profile's required and applicable optional section blocks; and
 - cited external sources referenced by those blocks.
 
-The Markdown briefing renders the localized title and lead, each block under
-its localized heading, and a sources list when external references were used.
-Items are grouped by Profile: the briefing title is H1, localized Profile names
-are H2 sections, items are H3 headings, and artifact blocks are H4 headings.
+Artifacts generated for `zh` are normalized to Simplified Chinese before they
+are stored and rendered, including older artifacts read during rendering.
+
+The Markdown briefing renders a block marked `primary` directly below the item
+title and before the source line, without a redundant block heading. Profiles
+without a primary block show the source first and then render every block under
+its bold localized title on the same line as its content. External references
+follow the blocks when used. Items
+are grouped by Profile: the briefing title is H1, localized Profile names are H2
+sections, and items are H3 headings. Set `digest.profile_order` to control the H2
+section order; a non-empty list must contain every loaded Profile exactly once.

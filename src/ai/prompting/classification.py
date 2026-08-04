@@ -14,11 +14,17 @@ Choose only an ID from the supplied profile catalog. Base the decision on the co
 def classification_user_prompt(
     item: ContentItem,
     profiles: ProfileRegistry,
+    profile_ids: tuple[str, ...] | None = None,
 ) -> str:
     content = (item.content or "").strip()[:2000]
+    selected_profiles = (
+        profiles.profiles
+        if profile_ids is None
+        else tuple(profiles.get(profile_id) for profile_id in profile_ids)
+    )
     catalog = "\n\n".join(
         f"## {profile.id}: {profile.definition.name}\n{profile.match_prompt}"
-        for profile in profiles.profiles
+        for profile in selected_profiles
     )
     return f"""# Profile catalog
 

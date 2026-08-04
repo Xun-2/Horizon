@@ -76,7 +76,7 @@ But Horizon is not just another summarizer. AI is great at reducing noise, but n
 ## Features
 
 - **📡 Watch Your Own Sources** — Track Hacker News, RSS, Reddit, Telegram, Twitter/X, GitHub releases or user activity, and OpenBB financial news watchlists in one pipeline
-- **🤖 Turn Noise Into a Reading List** — Route each item through a processing profile with its own analysis prompt and filter threshold
+- **🤖 Turn Noise Into a Reading List** — Analyze each item with a stable processing profile and apply your own filter threshold
 - **🔗 Merge Repeated Stories** — Deduplicate the same story across platforms before it reaches your briefing
 - **🔍 Understand the Background** — Add web-researched context for unfamiliar concepts, companies, projects, and technical terms
 - **💬 Read the Conversation** — Collect and summarize community comments from Hacker News, Reddit, and other supported sources
@@ -163,7 +163,7 @@ flowchart LR
 1. **Define** — Configure sources, processing profiles, models, languages, and delivery.
 2. **Fetch** — Pull latest content from all configured sources concurrently.
 3. **Deduplicate** — Merge items pointing to the same story or URL across platforms.
-4. **Analyze & Filter** — Select a profile, analyze each item with its prompt, and apply that profile's filter.
+4. **Analyze & Filter** — Select a profile, analyze each item with its prompt, and apply the configured user threshold.
 5. **Enrich** — Generate the profile's configured content blocks, using only tools allowed for each block.
 6. **Summarize** — Render localized titles, leads, sections, and cited sources as a Markdown briefing.
 7. **Deliver** — Publish the result to GitHub Pages, email, webhooks such as Feishu, MCP, or local files.
@@ -262,14 +262,24 @@ Minimal manual configuration:
   },
   "processing": {
     "profiles_dir": "profiles",
-    "default_profile": "tech-news"
+    "default_profile": "tech-news",
+    "profile_settings": {
+      "tech-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      }
+    }
   }
 }
 ```
 
 An explicit source `profile` uses that profile directly. Omit it or set it to
-`"auto"` to let AI match the item against the available profiles. See
+`"auto"` to let AI match the item against all available profiles. Set it to an
+array such as `["tech-news", "finance-news"]` to restrict AI matching to those
+profiles. See
 [Processing Profiles](docs/profiles.md) for profile structure and behavior.
+Per-profile user preferences such as score thresholds and topic deduplication
+belong in `processing.profile_settings`, not in the profile files.
 
 **Balanced digest (optional)**
 
@@ -388,7 +398,7 @@ Horizon is an open-source project maintained in spare time. If you'd like to sup
 | Guide | Description |
 |-------|-------------|
 | [Configuration](docs/configuration.md) | AI providers, sources, profiles, filtering, email, webhook, GitHub Pages, and MCP setup |
-| [Processing Profiles](docs/profiles.md) | Profile routing, prompts, filtering, enrichment blocks, and tools |
+| [Processing Profiles](docs/profiles.md) | Profile routing, prompts, runtime filtering preferences, enrichment blocks, and tools |
 | [Scoring](docs/scoring.md) | How Horizon evaluates and ranks news items |
 | [Scrapers](docs/scrapers.md) | Source scraper details and extension notes |
 | [Extractors](docs/extractors.md) | Full article extraction for RSS sources |

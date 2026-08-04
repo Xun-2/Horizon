@@ -170,10 +170,7 @@ class ContentAnalyzer:
             user=user_prompt,
         )
 
-        result, failure = self._validate_analysis_response(
-            response,
-            require_score=profile.definition.filter.enabled,
-        )
+        result, failure = self._validate_analysis_response(response)
         if result is None:
             repair_response = await self.client.complete(
                 system=self._analysis_system_prompt(profile),
@@ -184,10 +181,7 @@ class ContentAnalyzer:
                 ),
                 temperature=0,
             )
-            result, failure = self._validate_analysis_response(
-                repair_response,
-                require_score=profile.definition.filter.enabled,
-            )
+            result, failure = self._validate_analysis_response(repair_response)
 
         if result is None:
             logger.warning(
@@ -210,8 +204,6 @@ class ContentAnalyzer:
     def _validate_analysis_response(
         cls,
         response: str,
-        *,
-        require_score: bool,
     ) -> tuple[Optional[ContentAnalysis], str]:
         parsed = cls._parse_json_response(response)
         if not isinstance(parsed, dict):
@@ -222,6 +214,6 @@ class ContentAnalyzer:
             first_error = exc.errors(include_url=False)[0]
             location = ".".join(str(part) for part in first_error["loc"])
             return None, f"invalid field {location or '<root>'}: {first_error['type']}"
-        if require_score and result.score is None:
-            return None, "score is required by the profile filter"
+        if result.score is None:
+            return None, "score is required by the analysis contract"
         return result, ""

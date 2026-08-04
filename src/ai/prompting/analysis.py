@@ -23,7 +23,7 @@ def analysis_system_prompt(profile: LoadedProfile) -> str:
 
 Return valid JSON only:
 {{
-  "score": <number from 0 to 10, or null when this profile does not score>,
+  "score": <number from 0 to 10>,
   "reason": "<concise explanation>",
   "summary": "<one-sentence summary>",
   "tags": ["<tag>", "..."]

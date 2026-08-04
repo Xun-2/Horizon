@@ -282,6 +282,7 @@ class HorizonPipelineService:
             },
             "digest": {
                 "max_items": ctx.config.digest.max_items,
+                "profile_order": list(ctx.config.digest.profile_order),
                 "category_groups": {
                     key: group.model_dump(mode="json")
                     for key, group in ctx.config.digest.category_groups.items()
@@ -554,7 +555,8 @@ class HorizonPipelineService:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         summarizer = ctx.runtime.DailySummarizer(
-            profile_names=self._profiles(ctx).names
+            profile_names=self._profiles(ctx).names,
+            profile_order=ctx.config.digest.profile_order,
         )
         summary = await summarizer.generate_summary(
             items,

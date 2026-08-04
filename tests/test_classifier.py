@@ -107,3 +107,55 @@ def test_resolved_ai_profile_is_not_rewritten_as_source_override():
     assert item.processing.classification is prior_classification
     assert item.processing.classification.method == "ai_match"
     assert item.processing.classification.confidence == 0.9
+
+
+def test_candidate_profiles_restrict_ai_catalog():
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return '{"profile":"finance-news","confidence":0.95,"reason":"Finance first"}'
+
+    item = ContentItem(
+        id="telegram:test:1",
+        source_type=SourceType.TELEGRAM,
+        title="Central bank cuts rates",
+        url="https://example.com/finance",
+        content="The central bank reduced its benchmark rate.",
+        published_at=datetime.now(timezone.utc),
+        profile=["tech-news", "finance-news"],
+    )
+
+    profile = asyncio.run(
+        ContentClassifier(SimpleNamespace(complete=complete), BASE_PROFILES).resolve(item)
+    )
+
+    assert profile.id == "finance-news"
+    assert item.processing is not None
+    assert item.processing.classification.method == "ai_match"
+    assert "## tech-news:" in requests[0]["user"]
+    assert "## finance-news:" in requests[0]["user"]
+    assert "## tech-blog:" not in requests[0]["user"]
+
+
+def test_candidate_classification_failure_falls_back_within_candidates():
+    async def complete(**kwargs):
+        return '{"profile":"tech-news","confidence":0.9,"reason":"Wrong catalog"}'
+
+    item = ContentItem(
+        id="telegram:test:2",
+        source_type=SourceType.TELEGRAM,
+        title="Quarterly earnings",
+        url="https://example.com/earnings",
+        published_at=datetime.now(timezone.utc),
+        profile=["finance-news", "tech-blog"],
+    )
+
+    profile = asyncio.run(
+        ContentClassifier(SimpleNamespace(complete=complete), BASE_PROFILES).resolve(item)
+    )
+
+    assert profile.id == "finance-news"
+    assert item.processing is not None
+    assert item.processing.classification.profile == "finance-news"
+    assert item.processing.classification.confidence == 0

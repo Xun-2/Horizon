@@ -47,7 +47,7 @@ def _make_test_items() -> list[ContentItem]:
                 tags=["ai", "llm", "openai"],
                 title_en="GPT-5 Released with Multimodal Capabilities",
                 title_zh="GPT-5 发布：多模态能力大幅提升",
-                lead_zh="OpenAI 发布了 GPT-5，具备多模态能力和更强的推理能力。",
+                summary_zh="OpenAI 发布了 GPT-5，具备多模态能力和更强的推理能力。",
             ),
         ),
         ContentItem(
@@ -66,7 +66,7 @@ def _make_test_items() -> list[ContentItem]:
                 tags=["linux", "kernel", "performance"],
                 title_en="New Linux Kernel 7.0 Released",
                 title_zh="Linux 内核 7.0 发布",
-                lead_zh="Linux 内核 7.0 发布，带来显著性能提升和新硬件支持。",
+                summary_zh="Linux 内核 7.0 发布，带来显著性能提升和新硬件支持。",
             ),
         ),
     ]
@@ -78,7 +78,7 @@ def _sample_processing(
     tags: list[str],
     title_en: str,
     title_zh: str,
-    lead_zh: str,
+    summary_zh: str,
 ) -> ProcessingResult:
     return ProcessingResult(
         classification=ClassificationResult(
@@ -106,9 +106,9 @@ def _sample_processing(
                 blocks=[
                     ContentBlock(
                         id="summary",
-                        role="summary",
                         title="摘要",
-                        content=lead_zh,
+                        content=summary_zh,
+                        primary=True,
                     )
                 ],
             )

@@ -14,6 +14,7 @@ from src.models import (
     ClassificationResult,
     ContentAnalysis,
     ContentArtifact,
+    ContentBlock,
     ContentItem,
     ProcessingResult,
     PushPlusClawBotConfig,
@@ -841,7 +842,14 @@ def _make_item(title="Test Item", url="https://example.com/test", score=8.0):
                 language: ContentArtifact(
                     language=language,
                     title=title,
-                    lead="AI summary",
+                    blocks=[
+                        ContentBlock(
+                            id="summary",
+                            title="Summary",
+                            content="AI summary",
+                            primary=True,
+                        )
+                    ],
                 )
                 for language in ("en", "zh")
             },

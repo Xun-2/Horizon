@@ -11,7 +11,21 @@
   },
   "processing": {
     "profiles_dir": "profiles",
-    "default_profile": "tech-news"
+    "default_profile": "tech-news",
+    "profile_settings": {
+      "tech-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      },
+      "tech-blog": {
+        "threshold": 4.0,
+        "topic_dedup": false
+      },
+      "finance-news": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      }
+    }
   },
   "display": {
     "icon_style": "emoji"
@@ -56,6 +70,14 @@
         "enabled": true,
         "category": "ai-tools",
         "profile": "tech-news"
+      },
+      {
+        "name": "CNBC Finance",
+        "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+        "enabled": true,
+        "category": "finance",
+        "profile": "finance-news",
+        "content_extractor": "trafilatura"
       },
       {
         "name": "NVIDIA CUDA Technical Blog",
@@ -132,6 +154,17 @@
       "max_items": 30,
       "profile": "tech-news"
     },
+    "telegram": {
+      "enabled": true,
+      "channels": [
+        {
+          "channel": "zaihuapd",
+          "enabled": true,
+          "fetch_limit": 20,
+          "profile": ["tech-news", "finance-news"]
+        }
+      ]
+    },
     "gdelt": {
       "enabled": false,
       "query": "artificial intelligence",
@@ -159,6 +192,11 @@
   },
   "digest": {
     "max_items": null,
+    "profile_order": [
+      "tech-news",
+      "tech-blog",
+      "finance-news"
+    ],
     "category_groups": {},
     "default_group": "other",
     "default_group_limit": null
