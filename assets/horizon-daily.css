@@ -1,0 +1,27 @@
+:root { color-scheme: light; --ink: #18231d; --muted: #617068; --line: #d8dfda; --accent: #176b45; --paper: #ffffff; }
+* { box-sizing: border-box; }
+html { background: var(--paper); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { margin: 0; font-size: 16px; line-height: 1.65; letter-spacing: 0; }
+a { color: var(--accent); text-underline-offset: 0.18em; overflow-wrap: anywhere; }
+.page-shell { width: 100%; max-width: 680px; margin-inline: auto; padding-inline: 18px; }
+.site-header { padding-block: 28px 20px; border-bottom: 1px solid var(--line); }
+.brand { margin: 0; color: var(--accent); font-size: 0.875rem; font-weight: 700; }
+.site-header h1 { margin: 6px 0 0; font-size: 1.75rem; line-height: 1.25; }
+.daily-meta { margin: 10px 0 0; color: var(--muted); }
+.daily-item { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: 14px; padding-block: 22px; border-bottom: 1px solid var(--line); }
+.daily-number { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 700; }
+.daily-content { min-width: 0; }
+.daily-content h2 { margin: 0; font-size: 1.125rem; line-height: 1.4; overflow-wrap: anywhere; }
+.scan-summary { margin: 10px 0 0; color: var(--muted); }
+details { margin-top: 12px; }
+summary { display: flex; align-items: center; min-height: 44px; color: var(--accent); cursor: pointer; font-weight: 650; }
+.details-body { padding-bottom: 4px; overflow-wrap: anywhere; }
+.details-body h3 { margin: 18px 0 4px; font-size: 1rem; }
+.details-body p { margin: 6px 0; }
+.details-body ul { margin: 8px 0 0; padding-left: 1.25rem; }
+.language-switch { display: flex; gap: 14px; align-items: center; min-height: 44px; }
+.empty-state { padding-block: 32px; color: var(--muted); }
+.daily-index ol { margin: 0; padding: 0; list-style: none; }
+.daily-index li { display: flex; justify-content: space-between; gap: 18px; padding-block: 16px; border-bottom: 1px solid var(--line); }
+.daily-index li span { display: flex; gap: 14px; }
+@media (max-width: 360px) { .daily-item { grid-template-columns: 1.8rem minmax(0, 1fr); gap: 10px; } }
