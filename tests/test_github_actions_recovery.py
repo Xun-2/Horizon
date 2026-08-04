@@ -1,5 +1,23 @@
+import importlib
+import sys
+
+import pytest
+
 from src.services.github_actions import DailyWorkflowState, GitHubActionsError
 from scripts import github_actions_recovery as recovery
+
+
+@pytest.fixture(autouse=True)
+def _do_not_load_real_dotenv(monkeypatch):
+    monkeypatch.setattr(recovery, "load_dotenv", lambda **kwargs: False)
+
+
+def test_recovery_script_does_not_depend_on_untracked_environment_module(
+    monkeypatch,
+):
+    monkeypatch.setitem(sys.modules, "src.environment", None)
+
+    importlib.reload(recovery)
 
 
 class FakeClient:

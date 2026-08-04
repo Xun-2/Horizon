@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 import sys
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.environment import load_horizon_dotenv  # noqa: E402
 from src.services.github_actions import (  # noqa: E402
     DailyWorkflowState,
     GitHubActionsClient,
@@ -104,7 +105,11 @@ def _redact(value: str) -> str:
 
 
 def main(argv=None) -> int:
-    load_horizon_dotenv()
+    load_dotenv(
+        dotenv_path=ROOT / ".env",
+        override=False,
+        encoding="utf-8-sig",
+    )
     try:
         args = _parser().parse_args(argv)
         return asyncio.run(async_main(args))
