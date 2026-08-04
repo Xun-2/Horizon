@@ -1,0 +1,56 @@
+name: Daily Horizon Summary
+run-name: Horizon daily ${{ github.event_name }} #${{ github.run_number }}
+
+on:
+  schedule:
+    - cron: '22 23 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  pages: write
+
+concurrency:
+  group: horizon-daily
+  cancel-in-progress: false
+
+jobs:
+  daily-summary:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      AOLIGEI_API_KEY: ${{ secrets.AOLIGEI_API_KEY }}
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      HORIZON_GITHUB_TOKEN: ${{ github.token }}
+      HORIZON_WEBHOOK_URL: https://www.pushplus.plus/send
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.26'
+      - run: uv sync --extra dev
+      - id: date
+        shell: bash
+        run: echo "value=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+      - id: guard
+        shell: bash
+        run: |
+          decision="$(uv run python scripts/github_actions_recovery.py guard --date '${{ steps.date.outputs.value }}' --exclude-run-id '${{ github.run_id }}')"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+      - name: Run Horizon with one bounded retry
+        if: steps.guard.outputs.decision == 'run'
+        shell: bash
+        run: |
+          for attempt in 1 2; do
+            if uv run horizon --hours 24 --config data/config.github-actions.json; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 1 ]; then
+              sleep 120
+            fi
+          done
+          exit 1

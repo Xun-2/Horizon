@@ -1,0 +1,130 @@
+{
+  "ai": {
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "base_url": "https://aoligei.cc/v1",
+    "api_key_env": "AOLIGEI_API_KEY",
+    "temperature": 0.3,
+    "max_tokens": 4096,
+    "throttle_sec": 0,
+    "analysis_concurrency": 1,
+    "enrichment_concurrency": 1,
+    "languages": ["zh", "en"]
+  },
+  "sources": {
+    "github": [
+      {
+        "type": "repo_releases",
+        "owner": "openai",
+        "repo": "openai-python",
+        "enabled": true,
+        "category": "ai-models",
+        "profile": "tech-news"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "huggingface",
+        "repo": "transformers",
+        "enabled": true,
+        "category": "innovation-tech",
+        "profile": "tech-news"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "NVIDIA",
+        "repo": "garak",
+        "enabled": true,
+        "category": "model-security",
+        "profile": "tech-news"
+      }
+    ],
+    "hackernews": {
+      "enabled": true,
+      "fetch_top_stories": 30,
+      "min_score": 100,
+      "category": "innovation-tech",
+      "profile": "tech-news"
+    },
+    "rss": [
+      {
+        "name": "OpenAI News",
+        "url": "https://openai.com/news/rss.xml",
+        "enabled": true,
+        "category": "ai-models",
+        "profile": "tech-news"
+      },
+      {
+        "name": "Hugging Face Blog",
+        "url": "https://huggingface.co/blog/feed.xml",
+        "enabled": true,
+        "category": "innovation-tech",
+        "profile": "tech-blog",
+        "content_extractor": "trafilatura"
+      },
+      {
+        "name": "Embrace The Red",
+        "url": "https://embracethered.com/blog/index.xml",
+        "enabled": true,
+        "category": "model-security",
+        "profile": "tech-blog",
+        "content_extractor": "trafilatura"
+      }
+    ],
+    "reddit": {"enabled": false, "subreddits": [], "users": [], "fetch_comments": 0},
+    "telegram": {"enabled": false, "channels": []},
+    "twitter": null,
+    "openbb": null,
+    "ossinsight": {"enabled": false},
+    "gdelt": null,
+    "google_news": null
+  },
+  "collection": {"time_window_hours": 24},
+  "digest": {
+    "max_items": 12,
+    "category_groups": {
+      "ai-models": {"name": "AI 模型", "limit": 4, "categories": ["ai-models"]},
+      "innovation-tech": {"name": "创新技术", "limit": 4, "categories": ["innovation-tech"]},
+      "model-security": {"name": "模型安全", "limit": 4, "categories": ["model-security"]}
+    },
+    "default_group": "other",
+    "default_group_limit": 4
+  },
+  "filtering": {
+    "focus_topics": ["AI 模型", "创新技术", "模型安全"],
+    "ai_score_threshold": 6.5
+  },
+  "processing": {"profiles_dir": "profiles", "default_profile": "tech-news"},
+  "display": {"icon_style": "ascii"},
+  "extractors": {"trafilatura": {"type": "trafilatura", "favor_precision": true}},
+  "webhook": {
+    "enabled": true,
+    "url_env": "HORIZON_WEBHOOK_URL",
+    "delivery": "overview",
+    "overview_position": "first",
+    "platform": "pushplus",
+    "layout": "markdown",
+    "fallback_layout": "markdown",
+    "languages": ["zh", "en"],
+    "pushplus": {
+      "channel": "clawbot",
+      "template": "txt",
+      "confirmation": "accepted",
+      "message_mode": "bilingual_links",
+      "token_env": "PUSHPLUS_TOKEN",
+      "secret_key_env": null,
+      "status_timeout_seconds": 90,
+      "poll_interval_seconds": 2.0
+    },
+    "headers": ""
+  },
+  "github_pages": {
+    "enabled": true,
+    "repository": "Xun-2/Horizon",
+    "source_branch": "main",
+    "branch": "gh-pages",
+    "token_env": "HORIZON_GITHUB_TOKEN",
+    "site_url": "https://xun-2.github.io/Horizon",
+    "verify_timeout_seconds": 120,
+    "poll_interval_seconds": 2.0
+  }
+}
