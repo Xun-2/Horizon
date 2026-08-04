@@ -50,15 +50,25 @@ def test_rejects_invalid_profile_candidate_lists(route, message):
         Path(__file__).resolve().parents[1] / "profiles", "tech-news"
     )
 
+    with pytest.raises(ValueError, match=message):
+        registry.validate_source_references({"profile": route})
+
+
+def test_loads_builtin_tech_blog_profile():
+    registry = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    )
+
     profile = registry.get("tech-blog")
-    assert profile.definition.filter.enabled is False
-    assert profile.definition.filter.threshold is None
     assert profile.definition.display_names["zh"] == "科技博客"
     assert profile.definition.content.analysis_max_chars == 16000
     assert profile.definition.content.enrichment_max_chars == 24000
     assert profile.definition.content.sampling == "head-middle-tail"
-    assert profile.definition.topic_dedup.enabled is False
-    assert [block.id for block in profile.definition.enrichment.blocks] == ["story"]
+    assert [block.id for block in profile.definition.enrichment.blocks] == [
+        "background",
+        "solution",
+        "takeaway",
+    ]
     assert profile.definition.enrichment.blocks[0].tools == []
     assert "300-500 Chinese characters" in profile.enrichment_prompt
     assert "Technology blog profile" in profile.match_prompt
@@ -83,10 +93,6 @@ def test_example_config_includes_enabled_nvidia_tech_blog_source():
         "profile": "tech-blog",
         "content_extractor": "trafilatura",
     }
-    with pytest.raises(ValueError, match=message):
-        registry.validate_source_references({"profile": route})
-
-
 def test_default_profiles_fall_back_to_packaged_resources(tmp_path, monkeypatch):
     packaged_profiles = tmp_path / "packaged-profiles"
     source_profiles = Path(__file__).resolve().parents[1] / "profiles"

@@ -393,7 +393,9 @@ class HorizonOrchestrator:
         )
         summarizer = DailySummarizer(
             profile_names=profile_names,
-            profile_order=getattr(self.config.digest, "profile_order", []),
+            profile_order=getattr(
+                getattr(self.config, "digest", None), "profile_order", []
+            ),
         )
         for lang in languages:
             summary = await summarizer.generate_summary(

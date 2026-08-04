@@ -88,6 +88,7 @@ class ContentArtifact(BaseModel):
 
     language: str
     title: str
+    lead: str = ""
     blocks: List[ContentBlock] = Field(default_factory=list)
     sources: List[ArtifactSource] = Field(default_factory=list)
 
